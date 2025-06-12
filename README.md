@@ -1,5 +1,76 @@
 # PDF 요약 시스템
+# PDF 요약 도구
 
+이 도구는 PDF 문서를 처리하고 계층적 요약을 생성하는 파이프라인을 제공합니다.
+
+## 주요 기능
+
+- PDF 텍스트 추출 (비동기 병렬 처리)
+- 의미 검색 기반 텍스트 필터링
+- 계층적 요약 생성
+- Triton 추론 서버 통합
+
+## 최근 업데이트
+
+- 코드 모듈화 및 구조화 완료
+- 불필요한 파일 정리 (pdf_summarizer.py, semantic_search.py, allReadyPromptSummaryLLM.py)
+- Git 저장소 정리 및 .gitignore 추가
+- 성능 최적화 및 메모리 사용량 개선
+
+## 설치 방법
+
+```bash
+# 기본 설치
+pip install -e .
+
+# 개발 의존성 포함 설치
+pip install -e ".[dev]"
+```
+
+## 사용 방법
+
+```bash
+# 기본 사용법
+python main.py 요약할_PDF_파일.pdf
+
+# 도움말 보기
+python main.py --help
+```
+
+## 프로젝트 구조
+
+```
+/
+├── config/             # 설정 관련 모듈
+│   ├── __init__.py
+│   └── settings.py     # 앱 설정
+├── data/               # 데이터 저장소 (캐시, 로그 등)
+├── src/                # 소스 코드
+│   ├── core/           # 핵심 기능
+│   │   ├── pipeline.py     # 메인 파이프라인
+│   │   ├── pdf_processor.py# PDF 처리 모듈
+│   │   ├── summarizer.py   # 요약 엔진
+│   │   └── triton_client.py# Triton 서버 클라이언트
+│   ├── models/         # 데이터 모델
+│   ├── search/         # 검색 관련 모듈
+│   └── utils/          # 유틸리티 함수
+├── main.py             # 진입점
+├── setup.py            # 설치 스크립트
+└── requirements.txt    # 의존성 목록
+```
+
+## 의존성
+
+- Python 3.8 이상
+- PyMuPDF (fitz)
+- aiohttp
+- transformers
+- sentence-transformers (선택적)
+- faiss-cpu (선택적)
+
+## 라이선스
+
+MIT 라이선스
 PDF 문서를 처리하고 최신 임베딩 기술과 대규모 언어 모델을 활용하여 계층적으로 요약하는 고성능 파이프라인입니다.
 
 ## 프로젝트 개요
