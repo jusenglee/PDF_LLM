@@ -97,7 +97,7 @@ class OptimizedTritonClient:
         self,
         prompts: list[str],
         *,
-        max_new_tokens: int = 160,
+        max_new_tokens: int = 250,
         dynamic_batch_size: bool = True
     ) -> list[str]:
         """동적 배치 크기 조정과 파이프라이닝을 통한 최적화된 병렬 처리"""

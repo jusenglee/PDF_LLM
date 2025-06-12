@@ -21,7 +21,7 @@ class AdaptiveTokenManager:
     def create_adaptive_chunks(
         self, 
         text: str, 
-        target_summary_length: int = 200
+        target_summary_length: int = 350
     ) -> Tuple[List[TextChunk], Dict[str, Any]]:
         """적응적 청킹 알고리즘"""
 

@@ -110,7 +110,8 @@ async def process_pdf(pdf_path: str):
                     if times.get('extraction'):
                         print(f"  • PDF 추출: {times.get('extraction', 0):.2f}초")
                     if times.get('chunking'):
-                        print(f"  • 문서 분할: {times.get('chunking', 0):.2f}초")
+                        # 짧게 끝나는 작업을 위해 소수점 세 자리까지 표시
+                        print(f"  • 문서 분할: {times.get('chunking', 0):.3f}초")
                     if times.get('summarizing'):
                         print(f"  • 요약 생성: {times.get('summarizing', 0):.2f}초")
                     print(f"  • 총 소요시간: {total_time:.2f}초")
@@ -130,7 +131,7 @@ async def process_pdf(pdf_path: str):
 
 async def main():
     parser = argparse.ArgumentParser(description='PDF 요약 프로그램')
-    parser.add_argument('pdf_file', nargs='?', help='처리할 PDF 파일 경로', default='data/example3.pdf')
+    parser.add_argument('pdf_file', nargs='?', help='처리할 PDF 파일 경로', default='data/example.pdf')
     parser.add_argument('--output', '-o', help='결과 저장 파일 경로')
 
     args = parser.parse_args()

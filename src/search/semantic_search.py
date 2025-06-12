@@ -94,7 +94,7 @@ class SemanticSearchEngine:
         results.sort(key=lambda x: x.score, reverse=True)
         return results
 
-    def extract_relevant_context(self, query: str, text: str, top_k: int = 15, dedup_threshold: float = 0.85) -> str:
+    def extract_relevant_context(self, query: str, text: str, top_k: int = 15, dedup_threshold: float = 0.95) -> str:
         """원문에서 질의와 관련된 상위 K개 문장만 추출 - MAX_INPUT_TOKENS 제한 해결용
 
         Args:
@@ -145,7 +145,7 @@ class SemanticSearchEngine:
                     similarity = float(np.dot(chunk.embedding, selected.embedding))  # 코사인 유사도
 
                     # 유사도가 임계값보다 높으면 중복으로 처리
-                    if similarity > dedup_threshold:
+                    if similarity >= dedup_threshold:
                         is_duplicate = True
                         duplicate_count += 1
                         break

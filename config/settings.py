@@ -23,7 +23,7 @@ def load_ctx_len_from_json(path: Path) -> int:
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return int(data.get("build_config", {}).get("max_seq_len", 2048))
+        return int(data.get("build_config", {}).get("max_seq_len", 4096))
     except Exception:
         return 2048
 
