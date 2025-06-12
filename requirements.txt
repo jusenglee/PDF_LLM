@@ -1,0 +1,12 @@
+# 핵심 의존성
+PyMuPDF>=1.23.0  # PDF 처리 (fitz)
+aiohttp>=3.8.0   # 비동기 HTTP 통신
+transformers>=4.20.0  # 텍스트 토크나이징
+numpy>=1.21.0   # 수치 연산
+
+# 의미 검색 모듈용 (선택적)
+sentence-transformers>=2.2.0  # 문장 임베딩
+faiss-cpu>=1.7.0  # 벡터 유사도 검색
+
+# 유틸리티
+tqdm>=4.64.0    # 진행률 표시 (선택적)
