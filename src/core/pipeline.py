@@ -11,6 +11,7 @@ from config.settings import ROOT_DIR
 
 logger = logging.getLogger(__name__)
 
+
 class OptimizedPipeline:
     def __init__(
         self,
@@ -41,7 +42,6 @@ class OptimizedPipeline:
         self.triton = OptimizedTritonClient(triton_url, batch=16, tokenizer=tokenizer)
         self.summarizer = HierarchicalSummarizer(self.token_mgr, self.triton)
 
-
     async def __aenter__(self):
         """비동기 컨텍스트 관리자 진입점"""
         return self
@@ -51,9 +51,7 @@ class OptimizedPipeline:
         await self.close()
 
     async def process_document_optimized(
-        self,
-        pdf_path: str,
-        target_summary_length: int = 200
+        self, pdf_path: str, target_summary_length: int = 200
     ) -> dict:
         """최적화된 문서 처리 파이프라인"""
 
@@ -66,23 +64,20 @@ class OptimizedPipeline:
             extraction_start = time.time()
             try:
                 raw_text = await self.pdf_proc.extract(pdf_path)
-                process_times['extraction'] = time.time() - extraction_start
+                process_times["extraction"] = time.time() - extraction_start
                 if not raw_text.strip():
                     logger.warning(f"PDF에서 텍스트가 추출되지 않았습니다: {pdf_path}")
                     print(f"⚠️ PDF에서 텍스트가 추출되지 않았습니다: {pdf_path}")
                     return {
                         "warning": "PDF에 추출 가능한 텍스트가 없습니다",
-                        "success": False
+                        "success": False,
                     }
             except Exception as e:
                 logger.error(f"PDF 추출 실패: {e}")
                 print(f"❌ PDF 처리 오류: {e}")
-                return {
-                    "error": f"PDF 처리 오류: {e}",
-                    "success": False
-                }
+                return {"error": f"PDF 처리 오류: {e}", "success": False}
 
-            # 2. 텍스트 전처리 
+            # 2. 텍스트 전처리
             clean_text = raw_text.strip()
             if not clean_text:
                 raise ValueError("처리할 텍스트가 없습니다")
@@ -93,14 +88,11 @@ class OptimizedPipeline:
                 chunks, allocation = self.token_mgr.create_adaptive_chunks(
                     clean_text, target_summary_length
                 )
-                process_times['chunking'] = time.time() - chunking_start
+                process_times["chunking"] = time.time() - chunking_start
             except Exception as e:
                 logger.error(f"텍스트 청킹 실패: {e}")
                 print(f"❌ 청킹 오류: {e}")
-                return {
-                    "error": f"텍스트 청킹 오류: {e}",
-                    "success": False
-                }
+                return {"error": f"텍스트 청킹 오류: {e}", "success": False}
 
             # 4. 요약 처리
             summarizing_start = time.time()
@@ -108,18 +100,18 @@ class OptimizedPipeline:
                 result = await self.summarizer.smart_chunking_summary(
                     clean_text, target_summary_length
                 )
-                process_times['summarizing'] = time.time() - summarizing_start
+                process_times["summarizing"] = time.time() - summarizing_start
             except Exception as e:
                 logger.error(f"요약 처리 실패: {e}")
                 print(f"❌ 요약 오류: {e}")
-                return {
-                    "error": f"요약 처리 오류: {e}",
-                    "success": False
-                }
+                return {"error": f"요약 처리 오류: {e}", "success": False}
 
             # 5. 성공 결과 반환
             # 임베딩 사용 여부 확인
-            semantic_search_used = hasattr(self.summarizer, 'semantic_engine') and self.summarizer.semantic_engine is not None
+            semantic_search_used = (
+                hasattr(self.summarizer, "semantic_engine")
+                and self.summarizer.semantic_engine is not None
+            )
 
             # 임베딩 상태 명확히 로깅
             if semantic_search_used:
@@ -127,16 +119,22 @@ class OptimizedPipeline:
                 print("✨ 임베딩 모듈 활성화: 문서 핵심 내용 추출 기능 사용 중")
 
                 # 임베딩 처리 세부 정보 콘솔 출력
-                if 'embedding_info' in result:
-                    embedding_info = result.get('embedding_info', {})
+                if "embedding_info" in result:
+                    embedding_info = result.get("embedding_info", {})
                     if embedding_info:
-                        dim = embedding_info.get('dimension', 0)
-                        sent_count = embedding_info.get('sentences_count', 0)
-                        print(f"📋 임베딩 상세 정보: {dim}차원 벡터, {sent_count}개 문장 처리")
+                        dim = embedding_info.get("dimension", 0)
+                        sent_count = embedding_info.get("sentences_count", 0)
+                        print(
+                            f"📋 임베딩 상세 정보: {dim}차원 벡터, {sent_count}개 문장 처리"
+                        )
             else:
-                logger.warning("⚠️ 임베딩 모듈 비활성화 상태로 처리 완료 (sentence-transformers, faiss-cpu 설치 필요)")
+                logger.warning(
+                    "⚠️ 임베딩 모듈 비활성화 상태로 처리 완료 (sentence-transformers, faiss-cpu 설치 필요)"
+                )
                 print("⚠️ 임베딩 모듈 비활성화: 전체 텍스트 처리 모드로 동작 중")
-                print("💡 임베딩 활성화 방법: pip install sentence-transformers faiss-cpu")
+                print(
+                    "💡 임베딩 활성화 방법: pip install sentence-transformers faiss-cpu"
+                )
 
             # 전체 처리 시간 계산
             total_time = time.time() - start_time
@@ -145,31 +143,39 @@ class OptimizedPipeline:
             processing_stats = {
                 "chunks_created": len(chunks),
                 "avg_chunk_size": sum(c.token_count for c in chunks) / len(chunks),
-                "compression_ratio": len(result.get("final_summary", "")) / len(clean_text),
+                "compression_ratio": len(result.get("final_summary", ""))
+                / len(clean_text),
                 "semantic_search_used": semantic_search_used,
                 "process_times": process_times,
-                "total_time": total_time
+                "total_time": total_time,
             }
 
-            # 임베딩 정보가 있으면 통계에 포함
-            if 'embedding_info' in result:
-                processing_stats['embedding_info'] = result.pop('embedding_info')
+            if "original_chunk_count" in result:
+                processing_stats["selected_chunks"] = len(
+                    result.get("selected_chunk_indices", [])
+                )
+                processing_stats["original_chunks"] = result.get(
+                    "original_chunk_count", len(chunks)
+                )
 
-            result.update({
-                "token_allocation": allocation,
-                "success": True,
-                "processing_stats": processing_stats
-            })
+            # 임베딩 정보가 있으면 통계에 포함
+            if "embedding_info" in result:
+                processing_stats["embedding_info"] = result.pop("embedding_info")
+
+            result.update(
+                {
+                    "token_allocation": allocation,
+                    "success": True,
+                    "processing_stats": processing_stats,
+                }
+            )
 
             return result
 
         except Exception as e:
             logger.error(f"문서 처리 중 오류: {e}")
             print(f"❌ 오류 발생: {e}")
-            return {
-                "error": str(e),
-                "success": False
-            }
+            return {"error": str(e), "success": False}
 
     async def close(self):
         """안전한 리소스 정리"""
