@@ -124,9 +124,12 @@ class OptimizedTritonClient:
                 # 첫 번째 프롬프트는 토큰 정보 로깅 활성화 (선택적)
                 log_this_prompt = log_first_prompt and i == 0 and start_idx == 0
 
+                # 개별 프롬프트에 할당할 토큰 수 계산
+                token_budget = max_new_tokens(start_idx + i) if callable(max_new_tokens) else max_new_tokens
+
                 # 각 프롬프트를 독립적으로 처리하는 태스크 생성
                 task = asyncio.create_task(
-                    self._generate_single_cached(prompt, max_new_tokens, log_tokens=log_this_prompt, log_prompt=log_this_prompt),
+                    self._generate_single_cached(prompt, token_budget, log_tokens=log_this_prompt, log_prompt=log_this_prompt),
                     name=f"prompt_{start_idx + i}"
                 )
                 tasks.append(task)
