@@ -281,3 +281,46 @@
 2025-06-12 14:29:56,004 - __main__ - INFO - PDF 처리 시작: example3.pdf, 총 30페이지
 2025-06-12 14:30:04,528 - __main__ - INFO - PDF 처리 성공: example3.pdf
 2025-06-12 14:30:04,528 - __main__ - INFO - 처리 통계: {'chunks_created': 11, 'avg_chunk_size': 1080.090909090909, 'compression_ratio': 0.005317746330315549}
+2025-06-12 14:47:51,607 - semantic_search - WARNING - sentence-transformers 또는 faiss-cpu가 설치되지 않았습니다. 의미 검색 기능이 비활성화됩니다.
+2025-06-12 14:47:51,608 - __main__ - WARNING - 의미 검색 엔진 초기화 실패: 의미 검색을 위해 'sentence-transformers' 및 'faiss-cpu'를 설치하세요.
+2025-06-12 14:47:51,609 - __main__ - INFO - PDF 처리 시작: example3.pdf, 총 30페이지
+2025-06-12 14:48:00,082 - __main__ - INFO - PDF 처리 성공: example3.pdf
+2025-06-12 14:48:00,082 - __main__ - INFO - 처리 통계: {'chunks_created': 11, 'avg_chunk_size': 1080.090909090909, 'compression_ratio': 0.005317746330315549, 'semantic_search_used': False}
+2025-06-12 14:55:05,543 - faiss.loader - INFO - Loading faiss with AVX2 support.
+2025-06-12 14:55:05,564 - faiss.loader - INFO - Successfully loaded faiss with AVX2 support.
+2025-06-12 14:55:05,567 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes. This is only an error if you're trying to use GPU Faiss.
+2025-06-12 14:55:05,571 - sentence_transformers.SentenceTransformer - INFO - Use pytorch device_name: cpu
+2025-06-12 14:55:05,571 - sentence_transformers.SentenceTransformer - INFO - Load pretrained SentenceTransformer: sentence-transformers/all-MiniLM-L6-v2
+2025-06-12 14:55:15,327 - huggingface_hub.file_download - WARNING - Xet Storage is enabled for this repo, but the 'hf_xet' package is not installed. Falling back to regular HTTP download. For better performance, install the package with: `pip install huggingface_hub[hf_xet]` or `pip install hf_xet`
+2025-06-12 14:55:23,045 - semantic_search - INFO - 의미 검색 엔진 초기화 완료: sentence-transformers/all-MiniLM-L6-v2, 임베딩 차원: 384
+2025-06-12 14:55:23,045 - __main__ - INFO - 의미 검색 엔진 초기화 성공
+2025-06-12 14:55:23,055 - __main__ - INFO - PDF 처리 시작: example3.pdf, 총 30페이지
+2025-06-12 14:55:23,393 - __main__ - INFO - 임베딩 기반 의미 검색 적용 중...
+2025-06-12 14:55:24,228 - semantic_search - INFO - 임베딩 처리 완료: 77 문장
+2025-06-12 14:55:24,250 - semantic_search - INFO - 질의 '이 문서의 핵심 내용과 중요 정보를 요약'에 대해 15개 관련 문장 추출 (총 77개 중, 19.5%)
+2025-06-12 14:55:25,034 - semantic_search - INFO - 임베딩 처리 완료: 69 문장
+2025-06-12 14:55:25,045 - semantic_search - INFO - 질의 '이 문서의 핵심 내용과 중요 정보를 요약'에 대해 15개 관련 문장 추출 (총 69개 중, 21.7%)
+2025-06-12 14:55:25,780 - semantic_search - INFO - 임베딩 처리 완료: 54 문장
+2025-06-12 14:55:25,793 - semantic_search - INFO - 질의 '이 문서의 핵심 내용과 중요 정보를 요약'에 대해 15개 관련 문장 추출 (총 54개 중, 27.8%)
+2025-06-12 14:55:26,430 - semantic_search - INFO - 임베딩 처리 완료: 38 문장
+2025-06-12 14:55:26,441 - semantic_search - INFO - 질의 '이 문서의 핵심 내용과 중요 정보를 요약'에 대해 15개 관련 문장 추출 (총 38개 중, 39.5%)
+2025-06-12 14:55:27,201 - semantic_search - INFO - 임베딩 처리 완료: 57 문장
+2025-06-12 14:55:27,214 - semantic_search - INFO - 질의 '이 문서의 핵심 내용과 중요 정보를 요약'에 대해 15개 관련 문장 추출 (총 57개 중, 26.3%)
+2025-06-12 14:55:27,845 - semantic_search - INFO - 임베딩 처리 완료: 39 문장
+2025-06-12 14:55:27,858 - semantic_search - INFO - 질의 '이 문서의 핵심 내용과 중요 정보를 요약'에 대해 15개 관련 문장 추출 (총 39개 중, 38.5%)
+2025-06-12 14:55:28,529 - semantic_search - INFO - 임베딩 처리 완료: 48 문장
+2025-06-12 14:55:28,541 - semantic_search - INFO - 질의 '이 문서의 핵심 내용과 중요 정보를 요약'에 대해 15개 관련 문장 추출 (총 48개 중, 31.2%)
+2025-06-12 14:55:29,256 - semantic_search - INFO - 임베딩 처리 완료: 53 문장
+2025-06-12 14:55:29,269 - semantic_search - INFO - 질의 '이 문서의 핵심 내용과 중요 정보를 요약'에 대해 15개 관련 문장 추출 (총 53개 중, 28.3%)
+2025-06-12 14:55:29,917 - semantic_search - INFO - 임베딩 처리 완료: 43 문장
+2025-06-12 14:55:29,931 - semantic_search - INFO - 질의 '이 문서의 핵심 내용과 중요 정보를 요약'에 대해 15개 관련 문장 추출 (총 43개 중, 34.9%)
+2025-06-12 14:55:30,752 - semantic_search - INFO - 임베딩 처리 완료: 62 문장
+2025-06-12 14:55:30,766 - semantic_search - INFO - 질의 '이 문서의 핵심 내용과 중요 정보를 요약'에 대해 15개 관련 문장 추출 (총 62개 중, 24.2%)
+2025-06-12 14:55:30,979 - semantic_search - INFO - 임베딩 처리 완료: 53 문장
+2025-06-12 14:55:30,992 - semantic_search - INFO - 질의 '이 문서의 핵심 내용과 중요 정보를 요약'에 대해 15개 관련 문장 추출 (총 53개 중, 28.3%)
+2025-06-12 14:55:30,992 - __main__ - INFO - 임베딩 검색으로 텍스트 4.78배 축소 (평균)
+2025-06-12 14:55:39,974 - __main__ - WARNING - Triton 서버 호출 실패 (재시도 1/3): Triton 서버가 빈 응답을 반환했습니다
+2025-06-12 14:55:45,624 - __main__ - WARNING - Triton 서버 호출 실패 (재시도 2/3): Triton 서버가 빈 응답을 반환했습니다
+2025-06-12 14:55:51,776 - __main__ - ERROR - Triton 서버 호출 실패 (최종): Triton 서버가 빈 응답을 반환했습니다
+2025-06-12 14:55:51,777 - __main__ - INFO - PDF 처리 성공: example3.pdf
+2025-06-12 14:55:51,783 - __main__ - INFO - 처리 통계: {'chunks_created': 11, 'avg_chunk_size': 1080.090909090909, 'compression_ratio': 0.0007031730684714776, 'semantic_search_used': True}
