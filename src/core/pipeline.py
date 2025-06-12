@@ -1,9 +1,12 @@
 import logging
+import json
+from pathlib import Path
 from transformers import AutoTokenizer
 from src.utils.token_manager import AdaptiveTokenManager
 from src.core.pdf_processor import AsyncPDFProcessor
 from src.core.triton_client import OptimizedTritonClient
 from src.core.summarizer import HierarchicalSummarizer
+from config.settings import ROOT_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -12,8 +15,20 @@ class OptimizedPipeline:
         self,
         model_path: str = "./",
         triton_url: str = "http://203.250.238.30:8888/v2/models/ensemble/generate_stream",
-        ctx_len: int = 2048
+        ctx_len: int | None = None,
+        config_path: str | Path | None = None,
     ):
+        if ctx_len is None:
+            # config.json에서 max_seq_len 값을 읽어 기본 컨텍스트 길이로 사용
+            path = Path(config_path) if config_path else ROOT_DIR / "config.json"
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                ctx_len = int(data.get("build_config", {}).get("max_seq_len", 2048))
+            except Exception as e:
+                logger.warning(f"config.json 로드 실패: {e}")
+                ctx_len = 2048
+
         self.token_mgr = AdaptiveTokenManager(model_path, ctx_len)
         self.pdf_proc = AsyncPDFProcessor()
 
