@@ -393,11 +393,33 @@ class OptimizedTritonClient:
                 token_count = len(self.tokenizer(prompt, add_special_tokens=False).input_ids)
 
                 if token_count > MAX_INPUT_TOKENS:
-                    logger.warning(f"프롬프트 길이 초과: {token_count} 토큰 > {MAX_INPUT_TOKENS} 제한 (잘라냄)")
-                    # 토큰 단위로 자르기 위해 토크나이저 사용
-                    encoded = self.tokenizer(prompt, add_special_tokens=False)
-                    truncated_ids = encoded.input_ids[:MAX_INPUT_TOKENS]
-                    prompt = self.tokenizer.decode(truncated_ids)
+                    logger.warning(f"프롬프트 길이 초과: {token_count} 토큰 > {MAX_INPUT_TOKENS} 제한 (자동 축소)")
+
+                    # 지시문과 내용 분리 (지시문은 보존)
+                    parts = prompt.split("\n\n", 1)
+                    instruction = parts[0] if len(parts) > 1 else ""
+                    content = parts[1] if len(parts) > 1 else parts[0]
+
+                    # 지시문 토큰 수 계산
+                    instruction_tokens = len(self.tokenizer(instruction, add_special_tokens=False).input_ids)
+
+                    # 내용에 할당할 수 있는 최대 토큰 수 계산
+                    available_tokens = MAX_INPUT_TOKENS - instruction_tokens - 5  # 여유 토큰
+
+                    # 내용을 토큰 단위로 자르기
+                    encoded_content = self.tokenizer(content, add_special_tokens=False)
+                    truncated_content_ids = encoded_content.input_ids[:available_tokens]
+                    truncated_content = self.tokenizer.decode(truncated_content_ids)
+
+                    # 지시문과 잘린 내용 재결합
+                    if instruction:
+                        prompt = f"{instruction}\n\n{truncated_content}"
+                    else:
+                        prompt = truncated_content
+
+                    # 최종 토큰 수 로깅
+                    final_tokens = len(self.tokenizer(prompt, add_special_tokens=False).input_ids)
+                    logger.info(f"최종 프롬프트 길이: {final_tokens} 토큰 (축소 후)")
             except Exception as e:
                 logger.warning(f"토큰 길이 계산 중 오류 (무시됨): {e}")
 
@@ -490,6 +512,15 @@ class HierarchicalSummarizer:
     def __init__(self, token_mgr: AdaptiveTokenManager, triton_client: OptimizedTritonClient):
         self.token_mgr = token_mgr
         self.triton = triton_client
+        self.semantic_engine = None
+
+        # 의미 검색 엔진 초기화
+        try:
+            from semantic_search import SemanticSearchEngine
+            self.semantic_engine = SemanticSearchEngine()
+            logger.info("의미 검색 엔진 초기화 성공")
+        except ImportError as e:
+            logger.warning(f"의미 검색 엔진 초기화 실패: {e}")
         
     async def smart_chunking_summary(
         self, 
@@ -523,9 +554,48 @@ class HierarchicalSummarizer:
         # 다중 청크 처리
         chunk_prompts = []
         chars_per_chunk = target_length
-        for i, chunk in enumerate(chunks):
-            prompt = f"다음 텍스트의 핵심 내용을 {chars_per_chunk}자 이내로 요약해주세요 (파트 {i+1}/{len(chunks)}):\n\n{chunk.text}"
-            chunk_prompts.append(prompt)
+
+        # 임베딩 기반 문장 추출 사용 (가능한 경우)
+        semantic_extraction_used = False
+        if self.semantic_engine is not None:
+            try:
+                logger.info("임베딩 기반 의미 검색 적용 중...")
+                filtered_chunks = []
+                for i, chunk in enumerate(chunks):
+                    # 각 청크에 대해 '청크 요약' 쿼리를 사용하여 핵심 문장만 추출
+                    extraction_query = f"이 문서의 핵심 내용과 중요 정보를 요약"
+                    # top-k=15로 관련 문장만 추출
+                    filtered_text = self.semantic_engine.extract_relevant_context(
+                        extraction_query, chunk.text, top_k=15
+                    )
+                    # 원본 청크 대신 필터링된 문장들만 사용
+                    if filtered_text.strip():
+                        filtered_chunks.append({
+                            'index': i,
+                            'original_chunk': chunk,
+                            'filtered_text': filtered_text,
+                            'token_reduction': len(chunk.text) / len(filtered_text) if filtered_text else 1.0
+                        })
+
+                # 필터링된 청크가 있으면 이를 사용
+                if filtered_chunks:
+                    semantic_extraction_used = True
+                    avg_reduction = sum(c['token_reduction'] for c in filtered_chunks) / len(filtered_chunks)
+                    logger.info(f"임베딩 검색으로 텍스트 {avg_reduction:.2f}배 축소 (평균)")
+
+                    # 필터링된 텍스트로 프롬프트 생성
+                    for fc in filtered_chunks:
+                        prompt = f"다음 텍스트의 핵심 내용을 {chars_per_chunk}자 이내로 요약해주세요 (파트 {fc['index']+1}/{len(chunks)}):\n\n{fc['filtered_text']}"
+                        chunk_prompts.append(prompt)
+            except Exception as e:
+                logger.error(f"임베딩 기반 검색 처리 중 오류: {e}")
+                semantic_extraction_used = False
+
+        # 임베딩 검색 실패하거나 사용할 수 없는 경우 기존 방식 사용
+        if not semantic_extraction_used:
+            for i, chunk in enumerate(chunks):
+                prompt = f"다음 텍스트의 핵심 내용을 {chars_per_chunk}자 이내로 요약해주세요 (파트 {i+1}/{len(chunks)}):\n\n{chunk.text}"
+                chunk_prompts.append(prompt)
 
         # 병렬 요약 생성 - 문자 수를 토큰 수로 변환 (평균 1.5배)
         approx_tokens_per_chunk = max(40, int(chars_per_chunk * 0.67))
@@ -540,19 +610,44 @@ class HierarchicalSummarizer:
         if not combined_text.strip():
             logger.warning("모든 청크 요약이 실패했습니다. 직접 요약을 시도합니다.")
             # 모든 청크 요약이 실패한 경우 원본 텍스트에서 간단한 요약 추출
-            short_text = text[:min(len(text), 2000)]  # 원본 텍스트 앞부분만 사용
+            # 임베딩 기반 핵심 문장 추출 시도
+            if self.semantic_engine is not None:
+                try:
+                    # 핵심 문장 추출 쿼리
+                    extraction_query = "이 문서의 핵심 내용과 중요 정보를 요약"
+                    # 상위 20개 관련 문장 추출
+                    filtered_text = self.semantic_engine.extract_relevant_context(
+                        extraction_query, text, top_k=20
+                    )
+                    if filtered_text.strip():
+                        short_text = filtered_text
+                        logger.info(f"임베딩 필터링으로 최종 요약용 텍스트 추출 성공: {len(filtered_text)} 문자")
+                    else:
+                        short_text = text[:min(len(text), 2000)]  # 원본 텍스트 앞부분만 사용
+                except Exception as e:
+                    logger.error(f"임베딩 기반 최종 필터링 중 오류: {e}")
+                    short_text = text[:min(len(text), 2000)]  # 오류 시 원본 텍스트 앞부분만 사용
+            else:
+                short_text = text[:min(len(text), 2000)]  # 의미 검색 엔진 없을 경우 원본 앞부분만 사용
+
             final_prompt = f"다음 텍스트를 {target_length}자 이내로 간결하게 요약해주세요:\n\n{short_text}"
         else:
             final_prompt = f"다음 부분별 요약들을 종합하여 {target_length}자 이내의 최종 요약을 작성해주세요:\n\n{combined_text}"
 
         # 최종 요약에 충분한 토큰 할당 (한글 문자:토큰 비율 고려)
-        approx_tokens = int(target_length * 0.8)  # 여유 있게 토큰 할당 (0.67 → 0.8)
-        final_summary = await self.triton._generate_single_cached(final_prompt, max(60, approx_tokens))
-        
+        approx_tokens = max(80, int(target_length * 1.5))  # 토큰 할당량 대폭 증가
+        final_summary = await self.triton._generate_single_cached(final_prompt, approx_tokens)
+
+        # 처리 방법 결정
+        processing_method = "hierarchical"
+        if semantic_extraction_used:
+            processing_method = "hierarchical_with_embedding_filter"
+
         return {
             "chunk_summaries": chunk_summaries,
             "final_summary": final_summary,
-            "processing_method": "hierarchical"
+            "processing_method": processing_method,
+            "semantic_extraction_used": semantic_extraction_used
         }
 
 class OptimizedPipeline:
@@ -647,7 +742,9 @@ class OptimizedPipeline:
                 "processing_stats": {
                     "chunks_created": len(chunks),
                     "avg_chunk_size": sum(c.token_count for c in chunks) / len(chunks),
-                    "compression_ratio": len(result.get("final_summary", "")) / len(clean_text)
+                    "compression_ratio": len(result.get("final_summary", "")) / len(clean_text),
+                    "semantic_search_used": hasattr(self.summarizer, 'semantic_engine') and 
+                                            self.summarizer.semantic_engine is not None
                 }
             })
 
@@ -713,8 +810,9 @@ async def main(pdf_path: str):
 
                 stats = result.get('processing_stats', {})
                 if stats:
+                    semantic_info = "임베딩 검색 사용" if stats.get('semantic_search_used', False) else "전체 텍스트 사용"
                     print(f"\n📊 처리 통계: 청크 {stats.get('chunks_created', 0)}개, "
-                        f"압축률 {stats.get('compression_ratio', 0):.3f}")
+                        f"압축률 {stats.get('compression_ratio', 0):.3f}, {semantic_info}")
                     logger.info(f"처리 통계: {stats}")
             else:
                 error_msg = result.get('error', '알 수 없는 오류')

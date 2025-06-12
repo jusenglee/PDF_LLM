@@ -382,7 +382,212 @@ async def main(pdf_path: str):
     finally:
         await pipeline.close()
 
+import asyncio
+import logging
+from pathlib import Path
+from typing import Optional, Dict, Any, List
 
+# 기존 main3.py 모듈 임포트
+from main3 import OptimizedPipeline
+from semantic_search import SemanticSearchEngine, SEMANTIC_SEARCH_AVAILABLE
+
+# 로거 설정
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("summary_pipeline.log", mode="a")
+    ]
+)
+logger = logging.getLogger(__name__)
+
+class EmbeddingExtractiveAbstractiveSummarizer:
+    """임베딩 기반 추출형 사전 필터링 + 추상적 요약 파이프라인"""
+
+    def __init__(
+        self,
+        model_path: str = "./",
+        triton_url: str = "http://203.250.238.30:8888/v2/models/ensemble/generate_stream",
+        embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    ):
+        # 의미 검색 엔진 초기화
+        self.semantic_engine = None
+        if SEMANTIC_SEARCH_AVAILABLE:
+            try:
+                self.semantic_engine = SemanticSearchEngine(model_name=embedding_model)
+                logger.info(f"의미 검색 엔진 초기화 성공: {embedding_model}")
+            except ImportError as e:
+                logger.warning(f"의미 검색 엔진 초기화 실패: {e}")
+        else:
+            logger.warning("sentence-transformers/faiss 라이브러리가 설치되지 않아 의미 검색 비활성화")
+
+        # 파이프라인 초기화 (기존 최적화된 파이프라인 재사용)
+        self.pipeline = OptimizedPipeline(model_path, triton_url)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+
+    async def close(self):
+        """리소스 정리"""
+        await self.pipeline.close()
+
+    async def extract_and_summarize(self, text: str, target_length: int = 200) -> Dict[str, Any]:
+        """텍스트에서 핵심 문장 추출 후 요약 생성"""
+        if not text.strip():
+            return {
+                "error": "처리할 텍스트가 없습니다",
+                "success": False
+            }
+
+        # 1. 임베딩 기반 핵심 문장 추출
+        if self.semantic_engine is not None:
+            try:
+                logger.info("임베딩 기반 핵심 문장 추출 중...")
+                # 핵심 문장 추출 쿼리
+                extraction_query = "이 문서의 핵심 내용과 중요 정보를 요약"
+                # 관련 문장만 추출 (top_k는 문서 길이에 따라 동적 조정)
+                top_k = min(30, max(10, len(text) // 500))
+                filtered_text = self.semantic_engine.extract_relevant_context(
+                    extraction_query, text, top_k=top_k
+                )
+
+                if filtered_text.strip():
+                    # 압축률 계산
+                    compression_ratio = len(filtered_text) / len(text)
+                    logger.info(f"임베딩 필터링: {len(text)} → {len(filtered_text)} 문자 ({compression_ratio:.3f}배)")
+
+                    # 필터링 성공 시 이를 사용
+                    extraction_success = True
+                    processed_text = filtered_text
+                else:
+                    # 필터링 실패 시 원본 사용
+                    logger.warning("핵심 문장 추출 실패, 원본 텍스트 사용")
+                    extraction_success = False
+                    processed_text = text
+            except Exception as e:
+                logger.error(f"임베딩 처리 중 오류: {e}")
+                extraction_success = False
+                processed_text = text
+        else:
+            # 의미 검색 엔진 없음
+            extraction_success = False
+            processed_text = text
+
+        # 2. 요약 생성
+        try:
+            # 청킹 및 요약
+            summary_result = await self.pipeline.summarizer.smart_chunking_summary(
+                processed_text, target_length
+            )
+
+            # 결과에 추출 정보 추가
+            summary_result["extraction_applied"] = extraction_success
+            if extraction_success:
+                summary_result["extraction_stats"] = {
+                    "original_length": len(text),
+                    "filtered_length": len(processed_text),
+                    "compression_ratio": len(processed_text) / len(text)
+                }
+
+            summary_result["success"] = True
+            return summary_result
+
+        except Exception as e:
+            logger.error(f"요약 생성 중 오류: {e}")
+            return {
+                "error": f"요약 처리 오류: {e}",
+                "success": False,
+                "extraction_applied": extraction_success
+            }
+
+    async def process_pdf(self, pdf_path: str, target_length: int = 200) -> Dict[str, Any]:
+        """PDF 파일 처리 - 기존 파이프라인 활용"""
+        try:
+            # 파일 존재 확인
+            path = Path(pdf_path)
+            if not path.exists():
+                return {
+                    "error": f"PDF 파일이 존재하지 않습니다: {pdf_path}",
+                    "success": False
+                }
+
+            # 기존 파이프라인 활용 (임베딩 검색 자동 적용)
+            result = await self.pipeline.process_document_optimized(
+                pdf_path, target_length
+            )
+
+            # 결과에 현재 방식 표시
+            if result.get("success", False):
+                result["approach"] = "Option A - Embedding-based extractive pre-filter + abstractive summary"
+
+            return result
+
+        except Exception as e:
+            logger.error(f"PDF 처리 중 오류: {e}")
+            return {
+                "error": f"PDF 처리 오류: {e}",
+                "success": False
+            }
+
+async def main(pdf_path: str = "example3.pdf"):
+    """메인 함수 - 파이프라인 실행"""
+    print(f"📄 PDF 처리 시작: {pdf_path} (임베딩 기반 추출형 + 추상적 요약 방식)")
+
+    async with EmbeddingExtractiveAbstractiveSummarizer() as summarizer:
+        try:
+            result = await summarizer.process_pdf(pdf_path)
+
+            if result.get("success", False):
+                print("\n✅ 최종 요약 --------------------")
+                print(result.get("final_summary", "요약 내용이 없습니다."))
+
+                # 추가 정보 출력
+                stats = result.get("processing_stats", {})
+                if stats:
+                    semantic_used = "임베딩 검색 적용됨" if stats.get("semantic_search_used", False) else "임베딩 검색 미적용"
+                    print(f"\n📊 처리 통계: 청크 {stats.get('chunks_created', 0)}개, "  
+                          f"압축률 {stats.get('compression_ratio', 0):.3f}, {semantic_used}")
+            else:
+                error_msg = result.get("error", "알 수 없는 오류")
+                print(f"❌ 처리 실패: {error_msg}")
+
+        except Exception as e:
+            print(f"❌ 예기치 않은 오류 발생: {e}")
+
+if __name__ == "__main__":
+    # 라이브러리 로거 설정
+    transformers_logger = logging.getLogger("transformers")
+    transformers_logger.setLevel(logging.ERROR)  # transformers 경고 억제
+
+    # 샘플 PDF 처리
+    sample_pdf = "example3.pdf"
+
+    # 이벤트 루프 설정 및 실행
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    try:
+        loop.run_until_complete(main(sample_pdf))
+    except KeyboardInterrupt:
+        print("\n⬇️ 프로그램 종료 요청됨...")
+        # 실행 중인 모든 태스크 정리
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+
+        # 취소된 태스크들이 완료될 때까지 대기
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+    finally:
+        try:
+            loop.close()
+        except Exception as e:
+            print(f"루프 종료 중 오류: {e}")
+        print("✅ 완료")
 if __name__ == "__main__":
     sample_pdf = "example3.pdf"
 
