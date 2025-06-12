@@ -56,8 +56,84 @@ class HierarchicalSummarizer:
 
         # 다중 청크 처리
         chunk_prompts = []
-        # 청크별 요약 길이 감소 (더 강한 압축률 위해)
-        chars_per_chunk = int(target_length * 0.7)  # 요약 길이 30% 감소
+        # 청크별 요약 길이를 동적으로 할당
+        base_chars_per_chunk = int(target_length * 0.7)  # 기본 요약 길이 (30% 감소)
+
+        # 청크별 복잡도에 따른 동적 토큰 할당 계산 함수
+        def calculate_dynamic_token_allocation(chunks):
+            """청크 길이와 복잡도에 따라 동적으로 토큰 할당"""
+            # 청크 길이 정규화 (상대적 길이 계산)
+            total_tokens = sum(chunk.token_count for chunk in chunks)
+            avg_tokens = total_tokens / len(chunks) if chunks else base_chars_per_chunk
+
+            # 각 청크별 상대적 토큰 할당량 계산
+            allocations = {}
+
+            # 복잡도 지표: 문장 당 평균 단어 수로 추정
+            complexity_scores = {}
+
+            # 청크별 문장 수 계산
+            for i, chunk in enumerate(chunks):
+                text = chunk.text
+                sentences = [s.strip() for s in text.split('.') if s.strip()]
+                words = text.split()
+
+                # 문장 수와 단어 수 계산
+                sent_count = max(1, len(sentences))
+                words_count = len(words)
+
+                # 문장당 평균 단어 수로 복잡도 점수 계산
+                complexity = words_count / sent_count
+                complexity_scores[i] = complexity
+
+                # 청크 길이 정규화 (상대적 크기)
+                size_factor = chunk.token_count / avg_tokens
+
+                # 복잡도와 크기를 고려한 가중치 계산
+                allocations[i] = {
+                    'size_factor': size_factor,
+                    'complexity': complexity,
+                    'token_count': chunk.token_count
+                }
+
+            # 복잡도 점수 정규화
+            if complexity_scores:
+                avg_complexity = sum(complexity_scores.values()) / len(complexity_scores)
+                max_complexity = max(complexity_scores.values())
+                min_complexity = min(complexity_scores.values())
+                complexity_range = max(0.5, max_complexity - min_complexity)
+
+                # 정규화된 복잡도 점수 추가
+                for i in allocations:
+                    norm_complexity = (complexity_scores[i] - min_complexity) / complexity_range if complexity_range > 0 else 0.5
+                    allocations[i]['norm_complexity'] = max(0.7, min(1.3, 0.7 + norm_complexity))
+
+            # 최종 할당 계산
+            final_allocations = {}
+            for i, alloc in allocations.items():
+                # 기본 할당 (청크 크기 기반)
+                base_alloc = base_chars_per_chunk * alloc.get('size_factor', 1.0)
+
+                # 복잡도 기반 조정
+                complexity_factor = alloc.get('norm_complexity', 1.0)
+
+                # 최종 할당 (최소/최대 범위 제한)
+                final_alloc = int(base_alloc * complexity_factor)
+
+                # 너무 적거나 많은 할당 방지
+                final_alloc = max(int(base_chars_per_chunk * 0.7), min(int(base_chars_per_chunk * 1.5), final_alloc))
+
+                final_allocations[i] = final_alloc
+
+            logger.info(f"동적 토큰 할당: {final_allocations}")
+            print(f"🔍 청크별 동적 토큰 할당 계산 완료")
+            return final_allocations
+
+        # 동적 토큰 할당 계산
+        token_allocations = calculate_dynamic_token_allocation(chunks)
+
+        # 청크 요약에 사용할 기본 문자 수
+        chars_per_chunk = base_chars_per_chunk
 
         # 임베딩 기반 문장 추출 사용 (가능한 경우)
         semantic_extraction_used = False
@@ -90,17 +166,23 @@ class HierarchicalSummarizer:
 
                     # 필터링된 텍스트로 생성형 요약 프롬프트 생성
                     for fc in filtered_chunks:
+                        # 해당 청크에 대한 동적 할당 크기 사용
+                        idx = fc['index']
+                        dynamic_length = token_allocations.get(idx, chars_per_chunk)
+
                         prompt = f"""# 텍스트 요약 작업
 
         ## 원본 텍스트 (파트 {fc['index']+1}/{len(chunks)}):
         {fc['filtered_text']}
 
         ## 요약 지침:
-        1. 위 텍스트의 핵심 내용만 추출하여 {chars_per_chunk}자 이내로 간결하게 요약하세요.
+        1. 위 텍스트의 핵심 내용만 추출하여 {dynamic_length}자 내외로 요약하세요.
         2. 중요하지 않은 세부사항은 과감히 생략하세요.
         3. 원문의 핵심 개념과 주요 아이디어를 보존하세요.
         4. 요약은 완전한 문장으로 작성하고, 문장 사이에 적절한 연결성을 유지하세요.
         5. 원문에 없는 내용을 추가하지 마세요.
+        6. 모든 문장은 완결되게 작성하고, 중간에 끊기지 않도록 하세요.
+        7. 요약은 반드시 마침표로 끝나야 합니다.
 
         ## 요약 결과:"""
                         chunk_prompts.append(prompt)
@@ -111,26 +193,62 @@ class HierarchicalSummarizer:
         # 임베딩 검색 실패하거나 사용할 수 없는 경우 생성형 요약 방식 사용
         if not semantic_extraction_used:
             for i, chunk in enumerate(chunks):
+                # 해당 청크에 대한 동적 할당 크기 사용
+                dynamic_length = token_allocations.get(i, chars_per_chunk)
+
+                # 동적 할당 크기를 프롬프트에 반영
                 prompt = f"""# 텍스트 요약 작업
 
         ## 원본 텍스트 (파트 {i+1}/{len(chunks)}):
         {chunk.text}
 
         ## 요약 지침:
-        1. 위 텍스트의 핵심 내용만 추출하여 {chars_per_chunk}자 이내로 간결하게 요약하세요.
+        1. 위 텍스트의 핵심 내용만 추출하여 {dynamic_length}자 내외로 요약하세요.
         2. 중요하지 않은 세부사항은 과감히 생략하세요.
         3. 원문의 핵심 개념과 주요 아이디어를 보존하세요.
         4. 요약은 완전한 문장으로 작성하고, 문장 사이에 적절한 연결성을 유지하세요.
         5. 원문에 없는 내용을 추가하지 마세요.
+        6. 모든 문장은 완결되게 작성하고, 중간에 끊기지 않도록 하세요.
+        7. 요약은 반드시 마침표로 끝나야 합니다.
 
         ## 요약 결과:"""
                 chunk_prompts.append(prompt)
 
         # 병렬 요약 생성 - 문자 수를 토큰 수로 변환 (한국어의 경우 더 높은 비율)
-        approx_tokens_per_chunk = max(60, int(chars_per_chunk * 1.0))
+        # 동적 토큰 할당 정보 계산 (프롬프트 인덱스 → 토큰 수 매핑)
+        dynamic_tokens = {}
+
+        prompt_index = 0
+        if semantic_extraction_used:
+            # 임베딩 사용 시: filtered_chunks의 순서대로 프롬프트가 생성됨
+            for fc in filtered_chunks:
+                chunk_idx = fc['index']
+                chars = token_allocations.get(chunk_idx, chars_per_chunk)
+                # 문자 수를 토큰 수로 변환 (한국어 고려)
+                tokens = max(120, int(chars * 1.0))
+                dynamic_tokens[prompt_index] = tokens
+                prompt_index += 1
+        else:
+            # 임베딩 미사용 시: chunks 순서대로 프롬프트 생성됨
+            for i in range(len(chunks)):
+                chars = token_allocations.get(i, chars_per_chunk)
+                tokens = max(120, int(chars * 1.0))
+                dynamic_tokens[prompt_index] = tokens
+                prompt_index += 1
+
+        # 모든 프롬프트에 대한 토큰 할당 정보 로깅
+        logger.info(f"청크별 동적 토큰 할당 (최종): {dynamic_tokens}")
+        print(f"🔄 동적 토큰 할당으로 청크 요약 생성 중...")
+
+        # 개별 청크마다 다른 토큰 수 할당을 위한 함수
+        def get_tokens_for_prompt(idx):
+            # 정수 값 반환 보장 (JSON 직렬화 가능)
+            return int(max(40, dynamic_tokens.get(idx, 120)))  # 최소 40토큰 보장
+
+        # 청크별로 다른 토큰 수를 적용한 병렬 생성
         chunk_summaries = await self.triton.generate_parallel_optimized(
             chunk_prompts, 
-            max_new_tokens=max(40, approx_tokens_per_chunk)  # 최소 40토큰 보장
+            max_new_tokens=get_tokens_for_prompt
         )
 
         # 최종 통합 요약
@@ -173,10 +291,12 @@ class HierarchicalSummarizer:
         {combined_text}
 
         ## 요약 조건:
-        - 요약 길이: {enhanced_target_length}자 이내
+        - 요약 길이: {enhanced_target_length}자 내외로 작성할 것
         - 문서의 주제, 핵심 논점, 주요 내용을 포함할 것
         - 논리적 흐름을 유지하고 완전한 문장으로 작성할 것
         - 각 파트의 핵심만 추출하여 통합할 것
+        - 모든 문장은 완결되게 작성하고, 문장이 중간에 잘리지 않도록 할 것
+        - 요약의 마지막 문장은 반드시 마침표로 끝나도록 할 것
 
         ## 최종 요약:"""
 
@@ -218,9 +338,17 @@ class HierarchicalSummarizer:
         if semantic_extraction_used:
             processing_method = "hierarchical_with_embedding_filter"
 
+        # 임베딩 정보 수집 (사용된 경우)
+        embedding_info = None
+        if semantic_extraction_used and hasattr(self.semantic_engine, 'embedding_info'):
+            embedding_info = self.semantic_engine.embedding_info
+            logger.info(f"임베딩 정보 수집됨: {embedding_info}")
+
         return {
             "chunk_summaries": chunk_summaries,
             "final_summary": final_summary,
             "processing_method": processing_method,
-            "semantic_extraction_used": semantic_extraction_used
+            "semantic_extraction_used": semantic_extraction_used,
+            "embedding_info": embedding_info,
+            "dynamic_token_allocation": token_allocations
         }

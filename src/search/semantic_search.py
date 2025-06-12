@@ -189,4 +189,18 @@ class SemanticSearchEngine:
         if duplicate_count > 0:
             print(f"💡 임베딩 처리: {duplicate_count}개 유사 문장 제거됨, {len(final_chunks)}개 문장 선택")
 
+        # 임베딩 처리 정보 수집
+        self.embedding_info = {
+            "model_name": getattr(self.model, "name", "sentence-transformers/all-MiniLM-L6-v2"),
+            "dimension": self.dimension,
+            "sentences_count": len(self.chunks),
+            "selected_count": len(final_chunks),
+            "deduped_count": duplicate_count,
+            "filtering_ratio": extraction_rate,
+            "dedup_threshold": dedup_threshold
+        }
+
+        # 콘솔에 임베딩 상세 정보 출력
+        print(f"📊 임베딩 처리: 총 {len(self.chunks)}개 문장에서 {len(final_chunks)}개 선택 ({extraction_rate:.1f}%)")
+
         return context

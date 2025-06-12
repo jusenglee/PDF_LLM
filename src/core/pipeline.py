@@ -125,6 +125,14 @@ class OptimizedPipeline:
             if semantic_search_used:
                 logger.info("✅ 임베딩 모듈 활성화 상태로 처리 완료")
                 print("✨ 임베딩 모듈 활성화: 문서 핵심 내용 추출 기능 사용 중")
+
+                # 임베딩 처리 세부 정보 콘솔 출력
+                if 'embedding_info' in result:
+                    embedding_info = result.get('embedding_info', {})
+                    if embedding_info:
+                        dim = embedding_info.get('dimension', 0)
+                        sent_count = embedding_info.get('sentences_count', 0)
+                        print(f"📋 임베딩 상세 정보: {dim}차원 벡터, {sent_count}개 문장 처리")
             else:
                 logger.warning("⚠️ 임베딩 모듈 비활성화 상태로 처리 완료 (sentence-transformers, faiss-cpu 설치 필요)")
                 print("⚠️ 임베딩 모듈 비활성화: 전체 텍스트 처리 모드로 동작 중")
@@ -133,17 +141,24 @@ class OptimizedPipeline:
             # 전체 처리 시간 계산
             total_time = time.time() - start_time
 
+            # 임베딩 정보가 있으면 처리 통계에 추가
+            processing_stats = {
+                "chunks_created": len(chunks),
+                "avg_chunk_size": sum(c.token_count for c in chunks) / len(chunks),
+                "compression_ratio": len(result.get("final_summary", "")) / len(clean_text),
+                "semantic_search_used": semantic_search_used,
+                "process_times": process_times,
+                "total_time": total_time
+            }
+
+            # 임베딩 정보가 있으면 통계에 포함
+            if 'embedding_info' in result:
+                processing_stats['embedding_info'] = result.pop('embedding_info')
+
             result.update({
                 "token_allocation": allocation,
                 "success": True,
-                "processing_stats": {
-                    "chunks_created": len(chunks),
-                    "avg_chunk_size": sum(c.token_count for c in chunks) / len(chunks),
-                    "compression_ratio": len(result.get("final_summary", "")) / len(clean_text),
-                    "semantic_search_used": semantic_search_used,
-                    "process_times": process_times,
-                    "total_time": total_time
-                }
+                "processing_stats": processing_stats
             })
 
             return result

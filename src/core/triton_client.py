@@ -9,7 +9,7 @@ from src.utils.cache import ResponseCache
 logger = logging.getLogger(__name__)
 
 class OptimizedTritonClient:
-    MAX_SERVER_TOKENS = 1024
+    MAX_SERVER_TOKENS = 2048
 
     def __init__(self, url: str, batch: int = 16, timeout: float = 60.0, max_connections: int = 32, tokenizer=None):
         self.url = url.rstrip("/")
@@ -162,6 +162,16 @@ class OptimizedTritonClient:
 
         return [r for r in results if r is not None]
 
+    def _get_cache_key(self, prompt: str, max_new_tokens: int, temperature: float, top_p: float) -> str:
+        """프롬프트와 파라미터를 기반으로 캐시 키 생성"""
+        # 콜백 함수가 전달된 경우 기본값으로 대체
+        if callable(max_new_tokens):
+            max_new_tokens = 200  # 안전한 기본값
+
+        prompt_hash = hashlib.sha256(prompt.encode('utf-8')).hexdigest()[:16]
+        params_str = f"{max_new_tokens}_{temperature:.2f}_{top_p:.2f}"
+        return f"{prompt_hash}_{params_str}"
+
     def _log_prompt_to_file(self, prompt: str, prefix: str = "prompt"):
         """프롬프트 내용을 파일에 로깅"""
         try:
@@ -191,8 +201,13 @@ class OptimizedTritonClient:
     async def _generate_single_cached(self, prompt: str, max_new_tokens: int, log_tokens: bool = False, log_prompt: bool = False) -> str:
         """캐시를 활용한 단일 프롬프트 처리 - aiohttp 스트리밍 API 호출 방식"""
         # TensorRT-LLM 최대 입력 제한 처리 (2047 토큰)
-        MAX_INPUT_TOKENS = 2047
+        MAX_INPUT_TOKENS = 2048
         TOTAL_MODEL_CONTEXT = 4096  # 모델의 총 컨텍스트 길이
+
+        # 안전 마진 (토큰 계산의 오차를 고려) - 여유 있게 설정
+        SAFETY_MARGIN = 100
+        # 출력 토큰 최대 한계 (한계 초과 방지)
+        MAX_OUTPUT_TOKENS = 900
 
         # 토크나이저가 있을 경우에만 길이 제한 적용
         if self.tokenizer:
@@ -214,21 +229,42 @@ class OptimizedTritonClient:
                 token_count = len(self.tokenizer(prompt, add_special_tokens=False).input_ids)
 
                 # 토큰 수 로깅 옵션이 활성화된 경우 토큰 정보 출력
-                if log_tokens:
-                    available_tokens = MAX_INPUT_TOKENS - token_count
-                    response_tokens = min(max_new_tokens, TOTAL_MODEL_CONTEXT - MAX_INPUT_TOKENS)
+                # 총 토큰이 모델 한계를 넘지 않도록 자동 조정
+                total_possible_tokens = TOTAL_MODEL_CONTEXT - SAFETY_MARGIN
+                available_tokens = total_possible_tokens - token_count
 
+                # 요청 토큰이 가용 토큰을 초과하면 자동 조정
+                # callable 처리 추가
+                tokens_to_check = max_new_tokens
+                if callable(max_new_tokens):
+                    try:
+                        # 임의의 인덱스로 평가 (실제 값이 필요한 경우)
+                        tokens_to_check = max_new_tokens(0)
+                    except Exception as e:
+                        logger.warning(f"토큰 길이 계산 중 오류 (무시됨): {e}")
+                        tokens_to_check = 200  # 안전한 기본값
+
+                if token_count + tokens_to_check > total_possible_tokens:
+                    adjusted_tokens = max(100, min(available_tokens, MAX_OUTPUT_TOKENS))  # 최소 100토큰, 최대 MAX_OUTPUT_TOKENS 보장
+                    logger.info(f"토큰 자동 조정: {tokens_to_check} → {adjusted_tokens} (입력: {token_count}, 가용: {available_tokens})")
+                    max_new_tokens = adjusted_tokens
+                # 요청이 최대 출력 한계를 초과하는 경우에도 제한 적용
+                elif not callable(max_new_tokens) and max_new_tokens > MAX_OUTPUT_TOKENS:
+                    logger.info(f"최대 토큰 제한 적용: {max_new_tokens} → {MAX_OUTPUT_TOKENS}")
+                    max_new_tokens = MAX_OUTPUT_TOKENS
+
+                if log_tokens:
                     print(f"\n📊 프롬프트 토큰 정보:")
                     print(f"  • 입력 토큰 수: {token_count}")
-                    print(f"  • 최대 허용 토큰: {MAX_INPUT_TOKENS}")
+                    print(f"  • 최대 허용 컨텍스트: {TOTAL_MODEL_CONTEXT}")
+                    print(f"  • 안전 컨텍스트 한계: {total_possible_tokens}")
                     print(f"  • 응답 가능 토큰: {available_tokens}")
                     print(f"  • 요청 응답 토큰: {max_new_tokens}")
-                    print(f"  • 실제 사용 토큰: {response_tokens}")
 
-                    # 토큰 초과 가능성 경고 및 자동 조정
-                    if max_new_tokens > available_tokens:
-                        print(f"  ⚠️ 주의: 요청된 응답 토큰({max_new_tokens})이 사용 가능한 토큰({available_tokens})보다 많습니다.")
-                        print(f"  ⚠️ 모델은 최대 {response_tokens}개 토큰만 생성할 수 있습니다.")
+                    # 토큰 자동 조정 정보 표시
+                    if token_count + max_new_tokens > TOTAL_MODEL_CONTEXT:
+                        print(f"  ⚠️ 주의: 총 토큰({token_count + max_new_tokens})이 모델 한계({TOTAL_MODEL_CONTEXT})를 초과합니다.")
+                        print(f"  🔄 응답 토큰이 {max_new_tokens}개로 자동 조정되었습니다.")
 
                     # 프롬프트 로깅
                     log_file = self._log_prompt_to_file(prompt, f"prompt_{token_count}tokens")
@@ -286,6 +322,18 @@ class OptimizedTritonClient:
                     headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
                     data = {"text_input": prompt, "max_tokens": max_new_tokens}
 
+                    # API 호출 전에 모델 최대 컨텍스트 초과 여부 최종 확인
+                    if self.tokenizer:
+                        try:
+                            input_tokens = len(self.tokenizer(prompt, add_special_tokens=False).input_ids)
+                            if input_tokens + max_new_tokens > TOTAL_MODEL_CONTEXT - SAFETY_MARGIN:
+                                # 컨텍스트 길이를 넘지 않도록 출력 토큰 조정
+                                safe_tokens = max(50, min(TOTAL_MODEL_CONTEXT - SAFETY_MARGIN - input_tokens, MAX_OUTPUT_TOKENS))
+                                logger.warning(f"API 호출 전 토큰 안전 조정: {max_new_tokens} → {safe_tokens} (입력: {input_tokens})")
+                                data["max_tokens"] = safe_tokens  # API 요청 데이터 수정
+                        except Exception as e:
+                            logger.warning(f"토큰 안전 조정 실패 (무시): {e}")
+
                     async with self.session.post(
                         self.url,
                         json=data,
@@ -294,45 +342,80 @@ class OptimizedTritonClient:
                     ) as response:
                         response.raise_for_status()
 
-                        # 스트리밍 응답 처리 (chunked)
-                        async for chunk in response.content.iter_chunked(1024):
-                            chunk_text = chunk.decode("utf-8").strip()
+                        # 스트리밍 응답 처리 개선 - 청크 크기 증가 및 버퍼 보강
+                        buffer = ""
+                        last_incomplete = ""
+                        try:
+                            # 청크 크기를 늘려 스트리밍 안정성 향상
+                            async for chunk in response.content.iter_chunked(4096):
+                                try:
+                                    chunk_text = chunk.decode("utf-8")
+                                    # 이전에 처리하지 못한 불완전 라인과 현재 청크 결합
+                                    buffer = last_incomplete + chunk_text
+                                    lines = buffer.split('\n')
+                                    # 마지막 라인이 불완전할 수 있으므로 따로 저장
+                                    last_incomplete = lines.pop() if lines else ""
 
-                            # 줄 단위로 분할하여 처리
-                            for line in chunk_text.split('\n'):
-                                if not line or line.isspace():
+                                    # 완전한 라인들 처리
+                                    for line in lines:
+                                        line = line.strip()
+                                        if not line or line.isspace():
+                                            continue
+
+                                        # SSE 형식 처리
+                                        if line.startswith("event:"):
+                                            continue
+                                        if line.startswith("data: "):
+                                            try:
+                                                json_str = line[6:].strip()
+                                                data = json.loads(json_str)
+                                                text = data.get("text_output", "")
+                                                if text:
+                                                    full_text.append(text)
+                                            except json.JSONDecodeError as e:
+                                                # 불완전한 JSON일 가능성 - 로깅만 하고 계속 진행
+                                                logger.debug(f"응답 데이터 파싱 실패 (계속 진행): {line!r}")
+                                                logger.debug(f"JSONDecodeError: {e}, 위치: {e.pos}")
+                                                continue
+                                            except KeyError as e:
+                                                logger.debug(f"응답 데이터에서 필요한 키를 찾을 수 없음: {e}")
+                                                continue
+                                            except Exception as e:
+                                                logger.debug(f"응답 처리 중 예상치 못한 오류: {type(e).__name__}: {e}")
+                                                continue
+                                except UnicodeDecodeError as ude:
+                                    logger.warning(f"유니코드 디코딩 오류 (무시): {ude}")
                                     continue
 
-                                # SSE 형식 처리
-                                if line.startswith("event:"):
-                                    continue
-                                if line.startswith("data: "):
+                            # 스트림 종료 후 마지막 불완전 라인 처리
+                            if last_incomplete.strip():
+                                if last_incomplete.startswith("data: "):
                                     try:
-                                        json_str = line[6:].strip()
+                                        json_str = last_incomplete[6:].strip()
                                         data = json.loads(json_str)
                                         text = data.get("text_output", "")
                                         if text:
                                             full_text.append(text)
-                                    except json.JSONDecodeError as e:
-                                        # 더 자세한 오류 정보 로깅
-                                        logger.debug(f"응답 데이터 파싱 실패: {line!r}")
-                                        logger.debug(f"JSONDecodeError: {e}, 위치: {e.pos}, 라인: {e.lineno}, 열: {e.colno}")
-                                        continue
-                                    except KeyError as e:
-                                        logger.debug(f"응답 데이터에서 필요한 키를 찾을 수 없음: {e}")
-                                        continue
-                                    except Exception as e:
-                                        logger.debug(f"응답 처리 중 예상치 못한 오류: {type(e).__name__}: {e}")
-                                        continue
+                                    except Exception:
+                                        pass  # 마지막 불완전 데이터는 조용히 무시
+                        except Exception as e:
+                            logger.error(f"스트리밍 응답 처리 중 오류: {e}")
+                            # 에러가 나도 지금까지 받은 데이터는 처리 계속
 
-                    # 응답 결합
-                    result = "".join(full_text)
-                    if result:
-                        await self.cache.put(key, result)
-                        return result
+                    # 응답 결합 - 문자열 처리 개선
+                    if full_text:
+                        # 문자열 결합 시 strip/rstrip 사용하지 않음 (텍스트 잘림 방지)
+                        result = "".join(full_text)
+                        # 응답이 있으면 캐시 및 반환
+                        if result:
+                            await self.cache.put(key, result)
+                            return result
+                        else:
+                            # 빈 응답 처리
+                            raise ValueError("Triton 서버가 응답을 생성했으나 텍스트가 비어있습니다")
                     else:
-                        # 빈 응답 처리
-                        raise ValueError("Triton 서버가 빈 응답을 반환했습니다")
+                        # 응답 자체가 없는 경우
+                        raise ValueError("Triton 서버가 응답을 반환하지 않았습니다")
 
                 except Exception as e:
                     error_msg = str(e)

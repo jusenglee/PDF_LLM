@@ -71,8 +71,16 @@ async def process_pdf(pdf_path: str):
                     compression = stats.get('compression_ratio', 0)
                     chunks_count = stats.get('chunks_created', 0)
 
+                    # 동적 토큰 할당 정보 (있는 경우)
+                    token_allocation = stats.get('dynamic_token_allocation', {})
+                    has_dynamic_allocation = bool(token_allocation)
+
                     print(f"\n📊 처리 통계:")
                     print(f"  • 문서 분할: {chunks_count}개 청크")
+
+                    # 동적 토큰 할당 정보 표시
+                    if hasattr(stats, 'get') and stats.get('dynamic_token_allocation'):
+                        print(f"  • 토큰 할당: 청크별 동적 할당 적용 ✅")
 
                     # 압축률 표시 개선 (백분율 대신 축소 비율로 표시)
                     if compression > 0:
@@ -82,6 +90,17 @@ async def process_pdf(pdf_path: str):
                         print(f"  • 압축률: 계산 불가 (최종 요약이 없음)")
 
                     print(f"  • 처리 모드: {semantic_info}")
+
+                    # 임베딩 처리 정보 추가 출력
+                    if is_semantic:
+                        embedding_info = stats.get('embedding_info', {})
+                        if embedding_info:
+                            print(f"\n📊 임베딩 처리 정보:")
+                            print(f"  • 임베딩 모델: {embedding_info.get('model_name', '알 수 없음')}")
+                            print(f"  • 임베딩 차원: {embedding_info.get('dimension', 0)}")
+                            print(f"  • 처리된 문장 수: {embedding_info.get('sentences_count', 0)}개")
+                            print(f"  • 중복 제거 문장: {embedding_info.get('deduped_count', 0)}개")
+                            print(f"  • 필터링 성능: 원본 대비 {embedding_info.get('filtering_ratio', 0):.1f}%")
 
                     # 소요시간 표시 추가
                     times = stats.get('process_times', {})
