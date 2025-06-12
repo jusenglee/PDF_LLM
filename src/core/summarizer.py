@@ -1,7 +1,6 @@
 import logging
 import time
 import os
-import time
 from typing import Dict, Any, List
 from src.utils.token_manager import AdaptiveTokenManager
 from src.core.triton_client import OptimizedTritonClient
@@ -331,7 +330,7 @@ class HierarchicalSummarizer:
                 logger.warning(f"최종 요약 프롬프트 로깅 실패: {e}")
 
             # 최종 요약에 충분한 토큰 할당 (한글 문자:토큰 비율 고려)
-            approx_tokens = max(300, int(enhanced_target_length * 4))  # 토큰 할당량 더 크게 증가
+            approx_tokens = max(200, int(enhanced_target_length * 3))
 
             print(f"\n🔄 최종 요약 생성 중... (최대 {approx_tokens} 토큰 할당)")
             final_start_time = time.time()
