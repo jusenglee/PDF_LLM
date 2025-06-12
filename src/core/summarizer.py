@@ -7,8 +7,13 @@ from src.core.triton_client import OptimizedTritonClient
 
 logger = logging.getLogger(__name__)
 
+MAX_SELECTED_CHUNKS = 12  # 임베딩 기반 중요도 선별 시 최대 사용할 청크 수
+
+
 class HierarchicalSummarizer:
-    def __init__(self, token_mgr: AdaptiveTokenManager, triton_client: OptimizedTritonClient):
+    def __init__(
+        self, token_mgr: AdaptiveTokenManager, triton_client: OptimizedTritonClient
+    ):
         self.token_mgr = token_mgr
         self.triton = triton_client
         self.semantic_engine = None
@@ -16,6 +21,7 @@ class HierarchicalSummarizer:
         # 의미 검색 엔진 초기화
         try:
             from src.search.semantic_search import SemanticSearchEngine
+
             self.semantic_engine = SemanticSearchEngine()
             logger.info("✅ 임베딩 모듈(의미 검색 엔진) 초기화 성공")
             print("✅ 임베딩 모듈 로드됨: 문서 핵심 내용 추출 기능 활성화")
@@ -24,24 +30,70 @@ class HierarchicalSummarizer:
             print("⚠️ 임베딩 모듈 로드 실패: 전체 텍스트 처리 모드로 전환")
             print("💡 임베딩 활성화 방법: pip install sentence-transformers faiss-cpu")
 
+    def _select_top_chunks_by_embedding(
+        self, chunks: List, query: str, top_k: int = MAX_SELECTED_CHUNKS
+    ) -> (List, List[int]):
+        """임베딩 유사도 기준으로 상위 청크 선별"""
+        if self.semantic_engine is None:
+            return chunks, list(range(len(chunks)))
+
+        try:
+            model = self.semantic_engine.model
+            query_emb = model.encode([query], normalize_embeddings=True)[0]
+            chunk_embs = model.encode(
+                [c.text for c in chunks], normalize_embeddings=True
+            )
+            scores = [float((emb * query_emb).sum()) for emb in chunk_embs]
+            ranked = sorted(enumerate(chunks), key=lambda x: scores[x[0]], reverse=True)
+            selected = ranked[: min(top_k, len(ranked))]
+            selected_indices = sorted([idx for idx, _ in selected])
+            selected_chunks = [chunks[i] for i in selected_indices]
+            logger.info(
+                f"임베딩 중요도 순 청크 선별: {len(selected_chunks)}/{len(chunks)}개 선택"
+            )
+            print(
+                f"💡 중요도 기반 상위 {len(selected_chunks)}개 청크 선택 (총 {len(chunks)}개 중)"
+            )
+            return selected_chunks, selected_indices
+        except Exception as e:
+            logger.warning(f"청크 중요도 선별 실패: {e}")
+            return chunks, list(range(len(chunks)))
+
     async def smart_chunking_summary(
-        self, 
-        text: str, 
-        target_length: int = 200
+        self, text: str, target_length: int = 200
     ) -> Dict[str, Any]:
         """스마트 청킹 기반 계층적 요약"""
 
         chunks, allocation = self.token_mgr.create_adaptive_chunks(text, target_length)
 
+        original_chunk_count = len(chunks)
+        selected_indices = list(range(original_chunk_count))
+
+        # 청크 수가 많으면 임베딩을 활용해 중요도가 높은 청크만 선별
+        if (
+            self.semantic_engine is not None
+            and original_chunk_count > MAX_SELECTED_CHUNKS
+        ):
+            query = "이 문서의 핵심 내용과 중요 정보를 요약"
+            chunks, selected_indices = self._select_top_chunks_by_embedding(
+                chunks, query, MAX_SELECTED_CHUNKS
+            )
+
         if len(chunks) == 1:
             # 단일 청크는 직접 요약
             prompt = f"다음 텍스트를 {target_length}자 이내로 최대한 짧게 요약해주세요:\n\n{chunks[0].text}"
             # 토큰 길이 확인 (디버깅용, 토크나이저가 있는 경우만)
-            if hasattr(self.triton, 'tokenizer') and self.triton.tokenizer:
+            if hasattr(self.triton, "tokenizer") and self.triton.tokenizer:
                 try:
-                    token_count = len(self.triton.tokenizer(prompt, add_special_tokens=False).input_ids)
+                    token_count = len(
+                        self.triton.tokenizer(
+                            prompt, add_special_tokens=False
+                        ).input_ids
+                    )
                     if token_count > 2000:
-                        logger.warning(f"단일 청크 프롬프트 길이: {token_count} 토큰 (자동 잘림 예정)")
+                        logger.warning(
+                            f"단일 청크 프롬프트 길이: {token_count} 토큰 (자동 잘림 예정)"
+                        )
                 except Exception:
                     pass  # 토크나이저 오류는 무시
 
@@ -50,7 +102,7 @@ class HierarchicalSummarizer:
             return {
                 "chunk_summaries": [summary],
                 "final_summary": summary,
-                "processing_method": "direct"
+                "processing_method": "direct",
             }
 
         # 다중 청크 처리
@@ -74,7 +126,7 @@ class HierarchicalSummarizer:
             # 청크별 문장 수 계산
             for i, chunk in enumerate(chunks):
                 text = chunk.text
-                sentences = [s.strip() for s in text.split('.') if s.strip()]
+                sentences = [s.strip() for s in text.split(".") if s.strip()]
                 words = text.split()
 
                 # 문장 수와 단어 수 계산
@@ -90,37 +142,48 @@ class HierarchicalSummarizer:
 
                 # 복잡도와 크기를 고려한 가중치 계산
                 allocations[i] = {
-                    'size_factor': size_factor,
-                    'complexity': complexity,
-                    'token_count': chunk.token_count
+                    "size_factor": size_factor,
+                    "complexity": complexity,
+                    "token_count": chunk.token_count,
                 }
 
             # 복잡도 점수 정규화
             if complexity_scores:
-                avg_complexity = sum(complexity_scores.values()) / len(complexity_scores)
+                avg_complexity = sum(complexity_scores.values()) / len(
+                    complexity_scores
+                )
                 max_complexity = max(complexity_scores.values())
                 min_complexity = min(complexity_scores.values())
                 complexity_range = max(0.5, max_complexity - min_complexity)
 
                 # 정규화된 복잡도 점수 추가
                 for i in allocations:
-                    norm_complexity = (complexity_scores[i] - min_complexity) / complexity_range if complexity_range > 0 else 0.5
-                    allocations[i]['norm_complexity'] = max(0.7, min(1.3, 0.7 + norm_complexity))
+                    norm_complexity = (
+                        (complexity_scores[i] - min_complexity) / complexity_range
+                        if complexity_range > 0
+                        else 0.5
+                    )
+                    allocations[i]["norm_complexity"] = max(
+                        0.7, min(1.3, 0.7 + norm_complexity)
+                    )
 
             # 최종 할당 계산
             final_allocations = {}
             for i, alloc in allocations.items():
                 # 기본 할당 (청크 크기 기반)
-                base_alloc = base_chars_per_chunk * alloc.get('size_factor', 1.0)
+                base_alloc = base_chars_per_chunk * alloc.get("size_factor", 1.0)
 
                 # 복잡도 기반 조정
-                complexity_factor = alloc.get('norm_complexity', 1.0)
+                complexity_factor = alloc.get("norm_complexity", 1.0)
 
                 # 최종 할당 (최소/최대 범위 제한)
                 final_alloc = int(base_alloc * complexity_factor)
 
                 # 너무 적거나 많은 할당 방지
-                final_alloc = max(int(base_chars_per_chunk * 0.7), min(int(base_chars_per_chunk * 1.5), final_alloc))
+                final_alloc = max(
+                    int(base_chars_per_chunk * 0.7),
+                    min(int(base_chars_per_chunk * 1.5), final_alloc),
+                )
 
                 final_allocations[i] = final_alloc
 
@@ -142,7 +205,9 @@ class HierarchicalSummarizer:
                 filtered_chunks = []
                 for i, chunk in enumerate(chunks):
                     # 각 청크에 대해 '청크 요약' 쿼리를 사용하여 핵심 문장만 추출
-                    extraction_query = f"이 문서의 핵심 내용과 중요 정보를 최대한 짧게 요약"
+                    extraction_query = (
+                        f"이 문서의 핵심 내용과 중요 정보를 최대한 짧게 요약"
+                    )
                     # 관련 문장 추출 수 증가 (더 많은 컨텍스트 제공) 및 중복 제거 임계값 설정
                     # 0.85 임계값으로 유사 문장 중복 제거 활성화
                     filtered_text = self.semantic_engine.extract_relevant_context(
@@ -150,23 +215,33 @@ class HierarchicalSummarizer:
                     )
                     # 원본 청크 대신 필터링된 문장들만 사용
                     if filtered_text.strip():
-                        filtered_chunks.append({
-                            'index': i,
-                            'original_chunk': chunk,
-                            'filtered_text': filtered_text,
-                            'token_reduction': len(chunk.text) / len(filtered_text) if filtered_text else 1.0
-                        })
+                        filtered_chunks.append(
+                            {
+                                "index": i,
+                                "original_chunk": chunk,
+                                "filtered_text": filtered_text,
+                                "token_reduction": (
+                                    len(chunk.text) / len(filtered_text)
+                                    if filtered_text
+                                    else 1.0
+                                ),
+                            }
+                        )
 
                 # 필터링된 청크가 있으면 이를 사용
                 if filtered_chunks:
                     semantic_extraction_used = True
-                    avg_reduction = sum(c['token_reduction'] for c in filtered_chunks) / len(filtered_chunks)
-                    logger.info(f"임베딩 검색으로 텍스트 {avg_reduction:.2f}배 축소 (평균)")
+                    avg_reduction = sum(
+                        c["token_reduction"] for c in filtered_chunks
+                    ) / len(filtered_chunks)
+                    logger.info(
+                        f"임베딩 검색으로 텍스트 {avg_reduction:.2f}배 축소 (평균)"
+                    )
 
                     # 필터링된 텍스트로 생성형 요약 프롬프트 생성
                     for fc in filtered_chunks:
                         # 해당 청크에 대한 동적 할당 크기 사용
-                        idx = fc['index']
+                        idx = fc["index"]
                         dynamic_length = token_allocations.get(idx, chars_per_chunk)
 
                         prompt = f"""# 텍스트 요약 작업
@@ -221,7 +296,7 @@ class HierarchicalSummarizer:
         if semantic_extraction_used:
             # 임베딩 사용 시: filtered_chunks의 순서대로 프롬프트가 생성됨
             for fc in filtered_chunks:
-                chunk_idx = fc['index']
+                chunk_idx = fc["index"]
                 chars = token_allocations.get(chunk_idx, chars_per_chunk)
                 # 문자 수를 토큰 수로 변환 (한국어 고려)
                 tokens = max(120, int(chars * 1.0))
@@ -246,14 +321,13 @@ class HierarchicalSummarizer:
 
         # 청크별로 다른 토큰 수를 적용한 병렬 생성
         chunk_summaries = await self.triton.generate_parallel_optimized(
-            chunk_prompts, 
-            max_new_tokens=get_tokens_for_prompt
+            chunk_prompts, max_new_tokens=get_tokens_for_prompt
         )
 
         # 최종 통합 요약
-        combined_text = "\n\n".join([
-            s for s in chunk_summaries if s and not s.startswith("[오류")
-        ])  # 오류 응답 필터링
+        combined_text = "\n\n".join(
+            [s for s in chunk_summaries if s and not s.startswith("[오류")]
+        )  # 오류 응답 필터링
 
         # 요약 블록 및 문장 중복 제거 (순서 유지)
         if combined_text.strip():
@@ -287,14 +361,22 @@ class HierarchicalSummarizer:
                     )
                     if filtered_text.strip():
                         short_text = filtered_text
-                        logger.info(f"임베딩 필터링으로 최종 요약용 텍스트 추출 성공: {len(filtered_text)} 문자")
+                        logger.info(
+                            f"임베딩 필터링으로 최종 요약용 텍스트 추출 성공: {len(filtered_text)} 문자"
+                        )
                     else:
-                        short_text = text[:min(len(text), 2000)]  # 원본 텍스트 앞부분만 사용
+                        short_text = text[
+                            : min(len(text), 2000)
+                        ]  # 원본 텍스트 앞부분만 사용
                 except Exception as e:
                     logger.error(f"임베딩 기반 최종 필터링 중 오류: {e}")
-                    short_text = text[:min(len(text), 2000)]  # 오류 시 원본 텍스트 앞부분만 사용
+                    short_text = text[
+                        : min(len(text), 2000)
+                    ]  # 오류 시 원본 텍스트 앞부분만 사용
             else:
-                short_text = text[:min(len(text), 2000)]  # 의미 검색 엔진 없을 경우 원본 앞부분만 사용
+                short_text = text[
+                    : min(len(text), 2000)
+                ]  # 의미 검색 엔진 없을 경우 원본 앞부분만 사용
 
             final_prompt = f"다음 텍스트를 {target_length}자 이내로 간결하게 요약해주세요:\n\n{short_text}"
         else:
@@ -345,11 +427,12 @@ class HierarchicalSummarizer:
             # 최종 요약이 과도하게 길어지지 않도록 토큰 수 조정
             approx_tokens = max(150, int(enhanced_target_length * 2.5))
 
-
             print(f"\n🔄 최종 요약 생성 중... (최대 {approx_tokens} 토큰 할당)")
             final_start_time = time.time()
             # 토큰 정보 로깅 활성화
-            final_summary = await self.triton._generate_single_cached(final_prompt, approx_tokens, log_tokens=True, log_prompt=True)
+            final_summary = await self.triton._generate_single_cached(
+                final_prompt, approx_tokens, log_tokens=True, log_prompt=True
+            )
             final_time = time.time() - final_start_time
             print(f"✅ 최종 요약 완료 (소요시간: {final_time:.2f}초)")
 
@@ -360,7 +443,7 @@ class HierarchicalSummarizer:
 
         # 임베딩 정보 수집 (사용된 경우)
         embedding_info = None
-        if semantic_extraction_used and hasattr(self.semantic_engine, 'embedding_info'):
+        if semantic_extraction_used and hasattr(self.semantic_engine, "embedding_info"):
             embedding_info = self.semantic_engine.embedding_info
             logger.info(f"임베딩 정보 수집됨: {embedding_info}")
 
@@ -370,5 +453,7 @@ class HierarchicalSummarizer:
             "processing_method": processing_method,
             "semantic_extraction_used": semantic_extraction_used,
             "embedding_info": embedding_info,
-            "dynamic_token_allocation": token_allocations
+            "dynamic_token_allocation": token_allocations,
+            "original_chunk_count": original_chunk_count,
+            "selected_chunk_indices": selected_indices,
         }
