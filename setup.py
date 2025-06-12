@@ -13,15 +13,15 @@ setup(
         "faiss-cpu>=1.7.0"
     ],
     extras_require={
-        "dev": ["pytest", "pytest-asyncio", "black", "flake8"],
+        "dev": [
+            "pytest>=7.0.0",
+            "pytest-asyncio",
+            "flake8>=5.0.0",
+            "black>=22.0.0",
+            "mypy>=0.950",
+        ],
         "gpu": ["faiss-gpu"],
-            "dev": [
-                "pytest>=7.0.0",
-                "flake8>=5.0.0",
-                "black>=22.0.0",
-                "mypy>=0.950",
-            ]
-        },
+    },
         python_requires=">=3.8",
         entry_points={
             "console_scripts": [
