@@ -9,7 +9,7 @@ from src.utils.cache import ResponseCache
 logger = logging.getLogger(__name__)
 
 class OptimizedTritonClient:
-    MAX_SERVER_TOKENS = 2047
+    MAX_SERVER_TOKENS = 1024
 
     def __init__(self, url: str, batch: int = 16, timeout: float = 60.0, max_connections: int = 32, tokenizer=None):
         self.url = url.rstrip("/")

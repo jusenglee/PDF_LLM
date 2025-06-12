@@ -107,6 +107,18 @@ class OptimizedPipeline:
                 }
 
             # 5. 성공 결과 반환
+            # 임베딩 사용 여부 확인
+            semantic_search_used = hasattr(self.summarizer, 'semantic_engine') and self.summarizer.semantic_engine is not None
+
+            # 임베딩 상태 명확히 로깅
+            if semantic_search_used:
+                logger.info("✅ 임베딩 모듈 활성화 상태로 처리 완료")
+                print("✨ 임베딩 모듈 활성화: 문서 핵심 내용 추출 기능 사용 중")
+            else:
+                logger.warning("⚠️ 임베딩 모듈 비활성화 상태로 처리 완료 (sentence-transformers, faiss-cpu 설치 필요)")
+                print("⚠️ 임베딩 모듈 비활성화: 전체 텍스트 처리 모드로 동작 중")
+                print("💡 임베딩 활성화 방법: pip install sentence-transformers faiss-cpu")
+
             result.update({
                 "token_allocation": allocation,
                 "success": True,
@@ -114,8 +126,7 @@ class OptimizedPipeline:
                     "chunks_created": len(chunks),
                     "avg_chunk_size": sum(c.token_count for c in chunks) / len(chunks),
                     "compression_ratio": len(result.get("final_summary", "")) / len(clean_text),
-                    "semantic_search_used": hasattr(self.summarizer, 'semantic_engine') and 
-                                            self.summarizer.semantic_engine is not None
+                    "semantic_search_used": semantic_search_used
                 }
             })
 

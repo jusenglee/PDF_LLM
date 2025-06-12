@@ -35,14 +35,18 @@ class TritonConfig:
 
 @dataclass
 class AppConfig:
-    triton: TritonConfig = TritonConfig()
+    triton: TritonConfig = None
     semantic_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     log_level: str = "INFO"
     log_file: str = str(LOG_DIR / "pdf_pipeline.log")
     cache_ttl: int = 3600
     cache_max_size: int = 1000
-    model_path: str = "./"
+    model_path: str = "KISTI-KONI/KONI-Llama3.1-8B-Instruct-20241024"
     ctx_len: int = load_ctx_len_from_json(ROOT_DIR / "config.json")
+
+    def __post_init__(self):
+        if self.triton is None:
+            self.triton = TritonConfig()
 
 # 기본 설정 인스턴스 생성
 config = AppConfig()

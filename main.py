@@ -54,14 +54,40 @@ async def process_pdf(pdf_path: str):
                 for i, s in enumerate(result.get("chunk_summaries", []), 1):
                     print(f"[{i}] {s}")
 
-                print("\n✅ 최종 요약 --------------------")
-                print(result.get("final_summary", "요약 내용이 없습니다."))
+                final_summary = result.get("final_summary", "요약 내용이 없습니다.")
+                # 최종 요약이 비어있거나 매우 짧은 경우 처리
+                if len(final_summary.strip()) < 10:
+                    print("\n⚠️ 최종 요약 생성 실패 --------------------")
+                    print("파트별 요약 내용을 참고해 주세요.")
+                else:
+                    print("\n✅ 최종 요약 --------------------")
+                    # 줄바꿈으로 요약을 보기 좋게 표시
+                    formatted_summary = "\n".join([line.strip() for line in final_summary.split(".") if line.strip()])
+                    print(formatted_summary)
 
                 stats = result.get('processing_stats', {})
                 if stats:
-                    semantic_info = "임베딩 검색 사용" if stats.get('semantic_search_used', False) else "전체 텍스트 사용"
-                    print(f"\n📊 처리 통계: 청크 {stats.get('chunks_created', 0)}개, "
-                        f"압축률 {stats.get('compression_ratio', 0):.3f}, {semantic_info}")
+                    is_semantic = stats.get('semantic_search_used', False)
+                    semantic_info = "임베딩 검색 사용 ✅" if is_semantic else "전체 텍스트 사용 ⚠️"
+                    compression = stats.get('compression_ratio', 0)
+                    chunks_count = stats.get('chunks_created', 0)
+
+                    print(f"\n📊 처리 통계:")
+                    print(f"  • 문서 분할: {chunks_count}개 청크")
+
+                    # 압축률 표시 개선 (백분율 대신 축소 비율로 표시)
+                    if compression > 0:
+                        reduction_ratio = 1.0 / compression if compression > 0 else 0
+                        print(f"  • 압축률: {compression:.3f} (원본 대비 {int(compression*100)}%, {reduction_ratio:.1f}배 축소)")
+                    else:
+                        print(f"  • 압축률: 계산 불가 (최종 요약이 없음)")
+
+                    print(f"  • 처리 모드: {semantic_info}")
+
+                    if not is_semantic:
+                        print("\n💡 임베딩 모듈을 활성화하면 더 정확한 요약이 가능합니다.")
+                        print("   설치 명령어: pip install sentence-transformers faiss-cpu")
+
                     logger.info(f"처리 통계: {stats}")
             else:
                 error_msg = result.get('error', '알 수 없는 오류')
@@ -73,7 +99,7 @@ async def process_pdf(pdf_path: str):
 
 async def main():
     parser = argparse.ArgumentParser(description='PDF 요약 프로그램')
-    parser.add_argument('pdf_file', nargs='?', help='처리할 PDF 파일 경로', default='example3.pdf')
+    parser.add_argument('pdf_file', nargs='?', help='처리할 PDF 파일 경로', default='data/example3.pdf')
     parser.add_argument('--output', '-o', help='결과 저장 파일 경로')
 
     args = parser.parse_args()
