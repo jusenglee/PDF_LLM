@@ -251,7 +251,20 @@ class HierarchicalSummarizer:
         )
 
         # 최종 통합 요약
-        combined_text = "\n\n".join([s for s in chunk_summaries if s and not s.startswith("[오류")])  # 오류 응답 필터링
+        combined_text = "\n\n".join([
+            s for s in chunk_summaries if s and not s.startswith("[오류")
+        ])  # 오류 응답 필터링
+
+        # 요약 블록 및 문장 중복 제거 (순서 유지)
+        if combined_text.strip():
+            blocks = [b.strip() for b in combined_text.split("\n\n") if b.strip()]
+            unique_blocks = list(dict.fromkeys(blocks))
+            cleaned_blocks = []
+            for block in unique_blocks:
+                lines = [ln.strip() for ln in block.split("\n") if ln.strip()]
+                dedup_lines = list(dict.fromkeys(lines))
+                cleaned_blocks.append("\n".join(dedup_lines))
+            combined_text = "\n\n".join(cleaned_blocks)
 
         # 문장 중복 제거 (순서 유지)
         if combined_text.strip():
@@ -329,8 +342,9 @@ class HierarchicalSummarizer:
             except Exception as e:
                 logger.warning(f"최종 요약 프롬프트 로깅 실패: {e}")
 
-            # 최종 요약에 충분한 토큰 할당 (한글 문자:토큰 비율 고려)
-            approx_tokens = max(200, int(enhanced_target_length * 3))
+            # 최종 요약이 과도하게 길어지지 않도록 토큰 수 조정
+            approx_tokens = max(150, int(enhanced_target_length * 2.5))
+
 
             print(f"\n🔄 최종 요약 생성 중... (최대 {approx_tokens} 토큰 할당)")
             final_start_time = time.time()
