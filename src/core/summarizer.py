@@ -254,6 +254,13 @@ class HierarchicalSummarizer:
         # 최종 통합 요약
         combined_text = "\n\n".join([s for s in chunk_summaries if s and not s.startswith("[오류")])  # 오류 응답 필터링
 
+        # 문장 중복 제거 (순서 유지)
+        if combined_text.strip():
+            lines = combined_text.split("\n")
+            deduped_lines = list(dict.fromkeys(lines))  # 순서를 유지하며 중복 제거
+            deduped_lines = [line for line in deduped_lines if line.strip()]
+            combined_text = "\n".join(deduped_lines)
+
         if not combined_text.strip():
             logger.warning("모든 청크 요약이 실패했습니다. 직접 요약을 시도합니다.")
             # 모든 청크 요약이 실패한 경우 원본 텍스트에서 간단한 요약 추출
