@@ -1,5 +1,6 @@
 import logging
 import json
+import time
 from pathlib import Path
 from transformers import AutoTokenizer
 from src.utils.token_manager import AdaptiveTokenManager
@@ -56,10 +57,16 @@ class OptimizedPipeline:
     ) -> dict:
         """최적화된 문서 처리 파이프라인"""
 
+        # 시작 시간 기록
+        start_time = time.time()
+        process_times = {}
+
         try:
             # 1. PDF 추출
+            extraction_start = time.time()
             try:
                 raw_text = await self.pdf_proc.extract(pdf_path)
+                process_times['extraction'] = time.time() - extraction_start
                 if not raw_text.strip():
                     logger.warning(f"PDF에서 텍스트가 추출되지 않았습니다: {pdf_path}")
                     print(f"⚠️ PDF에서 텍스트가 추출되지 않았습니다: {pdf_path}")
@@ -81,10 +88,12 @@ class OptimizedPipeline:
                 raise ValueError("처리할 텍스트가 없습니다")
 
             # 3. 적응적 청킹
+            chunking_start = time.time()
             try:
                 chunks, allocation = self.token_mgr.create_adaptive_chunks(
                     clean_text, target_summary_length
                 )
+                process_times['chunking'] = time.time() - chunking_start
             except Exception as e:
                 logger.error(f"텍스트 청킹 실패: {e}")
                 print(f"❌ 청킹 오류: {e}")
@@ -94,10 +103,12 @@ class OptimizedPipeline:
                 }
 
             # 4. 요약 처리
+            summarizing_start = time.time()
             try:
                 result = await self.summarizer.smart_chunking_summary(
                     clean_text, target_summary_length
                 )
+                process_times['summarizing'] = time.time() - summarizing_start
             except Exception as e:
                 logger.error(f"요약 처리 실패: {e}")
                 print(f"❌ 요약 오류: {e}")
@@ -119,6 +130,9 @@ class OptimizedPipeline:
                 print("⚠️ 임베딩 모듈 비활성화: 전체 텍스트 처리 모드로 동작 중")
                 print("💡 임베딩 활성화 방법: pip install sentence-transformers faiss-cpu")
 
+            # 전체 처리 시간 계산
+            total_time = time.time() - start_time
+
             result.update({
                 "token_allocation": allocation,
                 "success": True,
@@ -126,7 +140,9 @@ class OptimizedPipeline:
                     "chunks_created": len(chunks),
                     "avg_chunk_size": sum(c.token_count for c in chunks) / len(chunks),
                     "compression_ratio": len(result.get("final_summary", "")) / len(clean_text),
-                    "semantic_search_used": semantic_search_used
+                    "semantic_search_used": semantic_search_used,
+                    "process_times": process_times,
+                    "total_time": total_time
                 }
             })
 

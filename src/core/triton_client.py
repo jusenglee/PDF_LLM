@@ -118,12 +118,15 @@ class OptimizedTritonClient:
         chunks = [prompts[i:i + effective_batch] for i in range(0, len(prompts), effective_batch)]
         results = [None] * len(prompts)
 
-        async def process_chunk(chunk_prompts: list[str], start_idx: int):
+        async def process_chunk(chunk_prompts: list[str], start_idx: int, log_first_prompt: bool = False):
             tasks = []
             for i, prompt in enumerate(chunk_prompts):
+                # 첫 번째 프롬프트는 토큰 정보 로깅 활성화 (선택적)
+                log_this_prompt = log_first_prompt and i == 0 and start_idx == 0
+
                 # 각 프롬프트를 독립적으로 처리하는 태스크 생성
                 task = asyncio.create_task(
-                    self._generate_single_cached(prompt, max_new_tokens),
+                    self._generate_single_cached(prompt, max_new_tokens, log_tokens=log_this_prompt, log_prompt=log_this_prompt),
                     name=f"prompt_{start_idx + i}"
                 )
                 tasks.append(task)
@@ -143,8 +146,13 @@ class OptimizedTritonClient:
         sem = asyncio.Semaphore(3)  # 최대 3개 청크 동시 처리
 
         async def process_chunk_with_limit(chunk, idx):
+            chunk_num = idx + 1
+            total_chunks = len(chunks)
+            print(f"  📊 청크 그룹 {chunk_num}/{total_chunks} 처리 중... ({len(chunk)}/{len(prompts)} 프롬프트)")
             async with sem:
-                await process_chunk(chunk, idx * effective_batch)
+                # 첫 번째 청크의 첫 번째 프롬프트만 로깅 (idx == 0)
+                await process_chunk(chunk, idx * effective_batch, log_first_prompt=(idx == 0))
+            print(f"  ✓ 청크 그룹 {chunk_num}/{total_chunks} 완료")
 
         # 모든 청크 병렬 처리 시작 (세마포어로 제한)
         await asyncio.gather(*[
@@ -154,18 +162,81 @@ class OptimizedTritonClient:
 
         return [r for r in results if r is not None]
 
-    async def _generate_single_cached(self, prompt: str, max_new_tokens: int) -> str:
+    def _log_prompt_to_file(self, prompt: str, prefix: str = "prompt"):
+        """프롬프트 내용을 파일에 로깅"""
+        try:
+            import os
+            import time
+            from pathlib import Path
+            from config.settings import LOG_DIR
+
+            # 로그 디렉토리 확인
+            prompt_log_dir = LOG_DIR / "prompts"
+            os.makedirs(prompt_log_dir, exist_ok=True)
+
+            # 타임스탬프로 로그 파일명 생성
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            log_file = prompt_log_dir / f"{prefix}_{timestamp}.log"
+
+            # 프롬프트 저장
+            with open(log_file, "w", encoding="utf-8") as f:
+                f.write(prompt)
+
+            logger.debug(f"프롬프트 로그 저장됨: {log_file}")
+            return str(log_file)
+        except Exception as e:
+            logger.warning(f"프롬프트 로깅 실패: {e}")
+            return None
+
+    async def _generate_single_cached(self, prompt: str, max_new_tokens: int, log_tokens: bool = False, log_prompt: bool = False) -> str:
         """캐시를 활용한 단일 프롬프트 처리 - aiohttp 스트리밍 API 호출 방식"""
         # TensorRT-LLM 최대 입력 제한 처리 (2047 토큰)
         MAX_INPUT_TOKENS = 2047
-        prompt = self._trim_for_server(prompt)
+        TOTAL_MODEL_CONTEXT = 4096  # 모델의 총 컨텍스트 길이
+
         # 토크나이저가 있을 경우에만 길이 제한 적용
         if self.tokenizer:
             try:
+                # 원본 토큰 수 확인
+                original_token_count = len(self.tokenizer(prompt, add_special_tokens=False).input_ids)
+
+                # 프롬프트 축소 전에 로깅 옵션 활성화된 경우 원본 토큰 정보 출력
+                if log_tokens and original_token_count > MAX_INPUT_TOKENS:
+                    print(f"\n📊 프롬프트 토큰 정보 (축소 전):")
+                    print(f"  • 원본 입력 토큰 수: {original_token_count}")
+                    print(f"  • 최대 허용 토큰: {MAX_INPUT_TOKENS}")
+                    print(f"  ⚠️ 토큰 초과: {original_token_count - MAX_INPUT_TOKENS}토큰 초과로 자동 축소됨")
+
+                # 프롬프트 길이 제한 적용
+                prompt = self._trim_for_server(prompt)
+
+                # 축소 후 토큰 수 다시 계산
                 token_count = len(self.tokenizer(prompt, add_special_tokens=False).input_ids)
 
+                # 토큰 수 로깅 옵션이 활성화된 경우 토큰 정보 출력
+                if log_tokens:
+                    available_tokens = MAX_INPUT_TOKENS - token_count
+                    response_tokens = min(max_new_tokens, TOTAL_MODEL_CONTEXT - MAX_INPUT_TOKENS)
+
+                    print(f"\n📊 프롬프트 토큰 정보:")
+                    print(f"  • 입력 토큰 수: {token_count}")
+                    print(f"  • 최대 허용 토큰: {MAX_INPUT_TOKENS}")
+                    print(f"  • 응답 가능 토큰: {available_tokens}")
+                    print(f"  • 요청 응답 토큰: {max_new_tokens}")
+                    print(f"  • 실제 사용 토큰: {response_tokens}")
+
+                    # 토큰 초과 가능성 경고 및 자동 조정
+                    if max_new_tokens > available_tokens:
+                        print(f"  ⚠️ 주의: 요청된 응답 토큰({max_new_tokens})이 사용 가능한 토큰({available_tokens})보다 많습니다.")
+                        print(f"  ⚠️ 모델은 최대 {response_tokens}개 토큰만 생성할 수 있습니다.")
+
+                    # 프롬프트 로깅
+                    log_file = self._log_prompt_to_file(prompt, f"prompt_{token_count}tokens")
+                    if log_file:
+                        print(f"  📝 프롬프트 로그: {log_file}")
+
                 if token_count > MAX_INPUT_TOKENS:
-                    logger.warning(f"프롬프트 길이 초과: {token_count} 토큰 > {MAX_INPUT_TOKENS} 제한 (자동 축소)")
+                    logger.warning(f"프롬프트 길이 초과: {token_count} 토큰 > {MAX_INPUT_TOKENS} 제한 (자동 축소 실패)")
 
                     # 지시문과 내용 분리 (지시문은 보존)
                     parts = prompt.split("\n\n", 1)

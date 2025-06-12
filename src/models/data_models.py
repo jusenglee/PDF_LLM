@@ -18,3 +18,7 @@ class SemanticChunk:
     embedding: Optional[np.ndarray] = None
     score: float = 0.0
     index: int = -1
+
+    def similarity_to(self, other: 'SemanticChunk') -> float:
+        """다른 청크와의 코사인 유사도 계산"""
+        return float(np.dot(self.embedding, other.embedding))

@@ -1,4 +1,7 @@
 import logging
+import time
+import os
+import time
 from typing import Dict, Any, List
 from src.utils.token_manager import AdaptiveTokenManager
 from src.core.triton_client import OptimizedTritonClient
@@ -33,7 +36,7 @@ class HierarchicalSummarizer:
 
         if len(chunks) == 1:
             # 단일 청크는 직접 요약
-            prompt = f"다음 텍스트를 {target_length}자 이내로 요약해주세요:\n\n{chunks[0].text}"
+            prompt = f"다음 텍스트를 {target_length}자 이내로 최대한 짧게 요약해주세요:\n\n{chunks[0].text}"
             # 토큰 길이 확인 (디버깅용, 토크나이저가 있는 경우만)
             if hasattr(self.triton, 'tokenizer') and self.triton.tokenizer:
                 try:
@@ -64,10 +67,11 @@ class HierarchicalSummarizer:
                 filtered_chunks = []
                 for i, chunk in enumerate(chunks):
                     # 각 청크에 대해 '청크 요약' 쿼리를 사용하여 핵심 문장만 추출
-                    extraction_query = f"이 문서의 핵심 내용과 중요 정보를 요약"
-                    # 관련 문장 추출 수 증가 (더 많은 컨텍스트 제공)
+                    extraction_query = f"이 문서의 핵심 내용과 중요 정보를 최대한 짧게 요약"
+                    # 관련 문장 추출 수 증가 (더 많은 컨텍스트 제공) 및 중복 제거 임계값 설정
+                    # 0.85 임계값으로 유사 문장 중복 제거 활성화
                     filtered_text = self.semantic_engine.extract_relevant_context(
-                        extraction_query, chunk.text, top_k=20
+                        extraction_query, chunk.text, top_k=20, dedup_threshold=0.85
                     )
                     # 원본 청크 대신 필터링된 문장들만 사용
                     if filtered_text.strip():
@@ -122,11 +126,11 @@ class HierarchicalSummarizer:
         ## 요약 결과:"""
                 chunk_prompts.append(prompt)
 
-        # 병렬 요약 생성 - 문자 수를 토큰 수로 변환 (평균 1.5배)
-        approx_tokens_per_chunk = max(40, int(chars_per_chunk * 0.67))
+        # 병렬 요약 생성 - 문자 수를 토큰 수로 변환 (한국어의 경우 더 높은 비율)
+        approx_tokens_per_chunk = max(60, int(chars_per_chunk * 1.0))
         chunk_summaries = await self.triton.generate_parallel_optimized(
             chunk_prompts, 
-            max_new_tokens=max(20, approx_tokens_per_chunk)  # 최소 20토큰 보장
+            max_new_tokens=max(40, approx_tokens_per_chunk)  # 최소 40토큰 보장
         )
 
         # 최종 통합 요약
@@ -140,9 +144,9 @@ class HierarchicalSummarizer:
                 try:
                     # 핵심 문장 추출 쿼리
                     extraction_query = "이 문서의 핵심 내용과 중요 정보를 요약"
-                    # 상위 20개 관련 문장 추출
+                    # 상위 20개 관련 문장 추출 (중복 제거 적용)
                     filtered_text = self.semantic_engine.extract_relevant_context(
-                        extraction_query, text, top_k=20
+                        extraction_query, text, top_k=20, dedup_threshold=0.85
                     )
                     if filtered_text.strip():
                         short_text = filtered_text
@@ -160,27 +164,54 @@ class HierarchicalSummarizer:
             # 목표 요약 길이 증가 (더 상세한 요약을 위해)
             enhanced_target_length = int(target_length * 1.5)  # 50% 늘린 요약 길이
 
-            final_prompt = f"""# 최종 문서 요약 생성
+            final_prompt = f"""# 문서 요약 생성
 
-        ## 부분별 요약 목록:
+        ## 요약 작업:
+        다음은 긴 문서의 파트별 요약입니다. 이 요약들을 통합하여 전체 내용을 담은 최종 요약을 작성해주세요.
+
+        ## 파트별 요약:
         {combined_text}
 
-        ## 통합 요약 지침:
-        1. 위 부분별 요약들을 종합하여 문서의 전체 내용을 대표하는 요약을 작성하세요.
-        2. 요약은 {enhanced_target_length}자 이내로 작성되어야 합니다.
-        3. 요약은 다음 구성요소를 포함해야 합니다:
-           - 문서의 전체적인 주제와 목적
-           - 핵심 논점과 주요 내용
-           - 중요한 결론이나 시사점
-        4. 요약은 논리적 흐름을 유지하고, 완전한 문장으로 구성되어야 합니다.
-        5. 모든 요약은 원본 문서의 내용에 충실해야 합니다.
-        6. 각 부분 요약에서 핵심적인 내용만 추출하여 통합하세요.
+        ## 요약 조건:
+        - 요약 길이: {enhanced_target_length}자 이내
+        - 문서의 주제, 핵심 논점, 주요 내용을 포함할 것
+        - 논리적 흐름을 유지하고 완전한 문장으로 작성할 것
+        - 각 파트의 핵심만 추출하여 통합할 것
 
         ## 최종 요약:"""
 
+            # 최종 요약 프롬프트 로깅
+            try:
+                from pathlib import Path
+                from config.settings import LOG_DIR
+
+                # 로그 디렉토리 확인
+                prompt_log_dir = LOG_DIR / "prompts"
+                os.makedirs(prompt_log_dir, exist_ok=True)
+
+                # 타임스탬프로 로그 파일명 생성
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                final_log_file = prompt_log_dir / f"final_prompt_{timestamp}.log"
+
+                # 최종 요약 프롬프트 저장
+                with open(final_log_file, "w", encoding="utf-8") as f:
+                    f.write("==== 최종 요약 프롬프트 ====\n\n")
+                    f.write(final_prompt)
+
+                logger.info(f"최종 요약 프롬프트 로그 저장됨: {final_log_file}")
+                print(f"ℹ️ 최종 요약 프롬프트 로그 저장됨: {final_log_file}")
+            except Exception as e:
+                logger.warning(f"최종 요약 프롬프트 로깅 실패: {e}")
+
             # 최종 요약에 충분한 토큰 할당 (한글 문자:토큰 비율 고려)
-            approx_tokens = max(200, int(enhanced_target_length * 3))  # 토큰 할당량 크게 증가
-            final_summary = await self.triton._generate_single_cached(final_prompt, approx_tokens)
+            approx_tokens = max(300, int(enhanced_target_length * 4))  # 토큰 할당량 더 크게 증가
+
+            print(f"\n🔄 최종 요약 생성 중... (최대 {approx_tokens} 토큰 할당)")
+            final_start_time = time.time()
+            # 토큰 정보 로깅 활성화
+            final_summary = await self.triton._generate_single_cached(final_prompt, approx_tokens, log_tokens=True, log_prompt=True)
+            final_time = time.time() - final_start_time
+            print(f"✅ 최종 요약 완료 (소요시간: {final_time:.2f}초)")
 
         # 처리 방법 결정
         processing_method = "hierarchical"

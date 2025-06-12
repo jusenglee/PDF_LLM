@@ -5,7 +5,6 @@ import logging
 import os
 import sys
 import locale
-from pathlib import Path
 
 from src.core.pipeline import OptimizedPipeline
 from config.settings import config
@@ -68,7 +67,7 @@ async def process_pdf(pdf_path: str):
                 stats = result.get('processing_stats', {})
                 if stats:
                     is_semantic = stats.get('semantic_search_used', False)
-                    semantic_info = "임베딩 검색 사용 ✅" if is_semantic else "전체 텍스트 사용 ⚠️"
+                    semantic_info = "임베딩 검색 (중복 제거) 사용 ✅" if is_semantic else "전체 텍스트 사용 ⚠️"
                     compression = stats.get('compression_ratio', 0)
                     chunks_count = stats.get('chunks_created', 0)
 
@@ -83,6 +82,19 @@ async def process_pdf(pdf_path: str):
                         print(f"  • 압축률: 계산 불가 (최종 요약이 없음)")
 
                     print(f"  • 처리 모드: {semantic_info}")
+
+                    # 소요시간 표시 추가
+                    times = stats.get('process_times', {})
+                    total_time = stats.get('total_time', 0)
+
+                    print(f"\n⏱️ 처리 소요시간:")
+                    if times.get('extraction'):
+                        print(f"  • PDF 추출: {times.get('extraction', 0):.2f}초")
+                    if times.get('chunking'):
+                        print(f"  • 문서 분할: {times.get('chunking', 0):.2f}초")
+                    if times.get('summarizing'):
+                        print(f"  • 요약 생성: {times.get('summarizing', 0):.2f}초")
+                    print(f"  • 총 소요시간: {total_time:.2f}초")
 
                     if not is_semantic:
                         print("\n💡 임베딩 모듈을 활성화하면 더 정확한 요약이 가능합니다.")

@@ -11,9 +11,10 @@ ROOT_DIR = Path(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 DATA_DIR = ROOT_DIR / "data"
 CACHE_DIR = DATA_DIR / "cache"
 LOG_DIR = DATA_DIR / "logs"
+PROMPT_LOG_DIR = LOG_DIR / "prompts"
 
 # 필요한 디렉토리 생성
-for directory in [DATA_DIR, CACHE_DIR, LOG_DIR]:
+for directory in [DATA_DIR, CACHE_DIR, LOG_DIR, PROMPT_LOG_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
 
 
