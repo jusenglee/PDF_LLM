@@ -2,9 +2,10 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 from typing import Optional
+import json
 
 # 프로젝트 루트 디렉토리
-ROOT_DIR = Path(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))  
+ROOT_DIR = Path(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 # 데이터 및 캐시 경로
 DATA_DIR = ROOT_DIR / "data"
@@ -14,6 +15,16 @@ LOG_DIR = DATA_DIR / "logs"
 # 필요한 디렉토리 생성
 for directory in [DATA_DIR, CACHE_DIR, LOG_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
+
+
+def load_ctx_len_from_json(path: Path) -> int:
+    """config.json에서 max_seq_len 값을 읽어 ctx_len 기본값으로 사용"""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return int(data.get("build_config", {}).get("max_seq_len", 2048))
+    except Exception:
+        return 2048
 
 @dataclass
 class TritonConfig:
@@ -31,7 +42,7 @@ class AppConfig:
     cache_ttl: int = 3600
     cache_max_size: int = 1000
     model_path: str = "./"
-    ctx_len: int = 2048
+    ctx_len: int = load_ctx_len_from_json(ROOT_DIR / "config.json")
 
 # 기본 설정 인스턴스 생성
 config = AppConfig()

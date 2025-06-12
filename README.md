@@ -59,6 +59,11 @@ python main.py --help
 └── requirements.txt    # 의존성 목록
 ```
 
+## config.json 파일
+
+모델 빌드 파라미터가 담긴 TensorRT-LLM용 설정 파일입니다. `build_config.max_seq_len` 값이
+파이프라인의 기본 컨텍스트 길이로 사용되며, 필요 시 파일을 수정해 최대 입력 길이를 조정할 수 있습니다.
+
 ## 의존성
 
 - Python 3.8 이상
