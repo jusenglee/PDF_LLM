@@ -131,7 +131,7 @@ async def process_pdf(pdf_path: str):
 
 async def main():
     parser = argparse.ArgumentParser(description='PDF 요약 프로그램')
-    parser.add_argument('pdf_file', nargs='?', help='처리할 PDF 파일 경로', default='data/example.pdf')
+    parser.add_argument('pdf_file', nargs='?', help='처리할 PDF 파일 경로', default='data/example2.pdf')
     parser.add_argument('--output', '-o', help='결과 저장 파일 경로')
 
     args = parser.parse_args()
